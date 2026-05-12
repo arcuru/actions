@@ -1,5 +1,51 @@
+# Installs Nix via DeterminateSystems' installer, configures optional
+# extra substituters / trusted keys / push target, optionally enables
+# Magic Nix Cache, and installs nix-fast-build.
+#
+# Defaults are tuned for repos with no custom binary cache: magic cache
+# is on, no extra substituters, no push. Pass the cache.* inputs to
+# layer a custom cache on top, or disable magic cache entirely.
+
 name: Setup Nix
-description: Install Nix with nix-fast-build and caching
+description: Install Nix, configure caches, optionally enable cache-push
+
+inputs:
+  enable-magic-cache:
+    description: |
+      Enable DeterminateSystems Magic Nix Cache (default "true"). Set to
+      "false" if you only want a custom cache and not GitHub's actions-
+      cache-backed nix store.
+    default: "true"
+  extra-substituters:
+    description: |
+      Newline-separated substituter URLs to add to the Nix configuration.
+      Example: https://cache.eidetica.dev
+    default: ""
+  extra-trusted-public-keys:
+    description: |
+      Newline-separated trusted public keys for the substituters above.
+      Required whenever extra-substituters is set.
+    default: ""
+  signing-key:
+    description: |
+      Nix store signing key (the secret-key-files content, not the public
+      key). When set together with push-target, the action exposes a
+      push-args output containing the nix-fast-build flags to push built
+      paths to the cache. Omit to disable push.
+    default: ""
+  push-target:
+    description: |
+      Cache push destination, e.g. s3://my-cache?region=auto&endpoint=https://...
+      Used only when signing-key is also set.
+    default: ""
+
+outputs:
+  push-args:
+    description: |
+      Extra nix-fast-build arguments to push built store paths to the
+      configured cache. Empty string unless both signing-key and
+      push-target are set.
+    value: ${{ steps.push-setup.outputs.args }}
 
 runs:
   using: composite
@@ -9,10 +55,27 @@ runs:
       with:
         extra-conf: |
           accept-flake-config = true
+          ${{ inputs.extra-substituters && format('extra-substituters = {0}', inputs.extra-substituters) || '' }}
+          ${{ inputs.extra-trusted-public-keys && format('extra-trusted-public-keys = {0}', inputs.extra-trusted-public-keys) || '' }}
 
     - name: Enable Magic Nix Cache
+      if: inputs.enable-magic-cache == 'true'
       uses: DeterminateSystems/magic-nix-cache-action@6221693898146dc97e38ad0e013488a16477a4c4 # v9
 
     - name: Install nix-fast-build
       shell: bash
       run: nix profile install nixpkgs#nix-fast-build
+
+    - name: Configure cache push
+      id: push-setup
+      shell: bash
+      env:
+        SIGNING_KEY: ${{ inputs.signing-key }}
+        PUSH_TARGET: ${{ inputs.push-target }}
+      run: |
+        if [ -n "$SIGNING_KEY" ] && [ -n "$PUSH_TARGET" ]; then
+          echo "$SIGNING_KEY" > /tmp/nix-cache-key.pem
+          echo "args=--copy-to '$PUSH_TARGET' --option secret-key-files /tmp/nix-cache-key.pem" >> "$GITHUB_OUTPUT"
+        else
+          echo "args=" >> "$GITHUB_OUTPUT"
+        fi
