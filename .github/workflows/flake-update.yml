@@ -1,15 +1,42 @@
-# Reusable workflow: run `nix flake update`, open or refresh a deps PR.
-# See README.md for caller wrapper example.
-
+# Monthly Nix flake input update. Runs `nix flake update` to bump flake.lock,
+# generates a diff summary with GitHub compare links for each changed input,
+# then creates a PR on the deps/flake-update branch with a configurable hold
+# period before merge. CI handles verification via normal PR checks.
+#
 name: "Deps: Flake Update"
 
 on:
   workflow_call:
     inputs:
       hold-days:
-        description: "Days to hold before allowing merge"
+        description: "Days to hold before allowing merge."
         required: false
         default: "7"
+        type: string
+      runs-on:
+        description: "Runner label or JSON list. Default: ubuntu-latest."
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      environment:
+        description: "GitHub Actions environment name for the job."
+        required: false
+        default: ""
+        type: string
+      enable-magic-cache:
+        description: "Enable DeterminateSystems Magic Nix Cache."
+        required: false
+        default: "true"
+        type: string
+      extra-substituters:
+        description: "Newline-separated extra Nix substituter URLs."
+        required: false
+        default: ""
+        type: string
+      extra-trusted-public-keys:
+        description: "Newline-separated trusted public keys."
+        required: false
+        default: ""
         type: string
     secrets:
       PAT_TOKEN:
@@ -23,7 +50,8 @@ concurrency:
 jobs:
   flake-update:
     name: Flake Update
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
+    environment: ${{ inputs.environment }}
     if: github.repository_owner == 'arcuru'
     permissions:
       contents: write
@@ -35,10 +63,14 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Setup Nix
-        uses: arcuru/actions/.github/actions/setup-nix@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+        uses: arcuru/actions/.github/actions/setup-nix@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
+        with:
+          enable-magic-cache: ${{ inputs.enable-magic-cache }}
+          extra-substituters: ${{ inputs.extra-substituters }}
+          extra-trusted-public-keys: ${{ inputs.extra-trusted-public-keys }}
 
       - name: Setup deps branch
-        uses: arcuru/actions/.github/actions/setup-deps-branch@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+        uses: arcuru/actions/.github/actions/setup-deps-branch@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
         with:
           branch: deps/flake-update
 
@@ -103,7 +135,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Commit and create PR
-        uses: arcuru/actions/.github/actions/commit-and-pr@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+        uses: arcuru/actions/.github/actions/commit-and-pr@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
         with:
           branch: deps/flake-update
           files: flake.lock

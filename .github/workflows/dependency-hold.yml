@@ -1,13 +1,19 @@
-# Reusable workflow: PR status check that fails any PR on a `deps/*`
-# branch while it still has the `on-hold` label. Pairs with update-hold,
-# which removes the label after the hold period expires.
-# See README.md for caller wrapper example.
-
+# Required status check that blocks merging dependency update PRs during
+# their hold period. Passes immediately for non-deps/ branches. For deps/
+# branches, queries the GitHub API for current labels and fails if the PR
+# has the "on-hold" label. Uses live label queries instead of event payload
+# data so that manual re-runs always see the current label state.
+#
 name: "Deps: Hold Gate"
 
 on:
   workflow_call:
-    inputs: {}
+    inputs:
+      runs-on:
+        description: "Runner label or JSON list. Default: ubuntu-latest."
+        required: false
+        default: "ubuntu-latest"
+        type: string
     # No secrets required.
 
 permissions:
@@ -20,7 +26,7 @@ concurrency:
 jobs:
   dependency-hold:
     name: Dependency Hold
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     steps:
       - name: Check hold status
         env:
@@ -28,6 +34,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Pass immediately for non-dependency branches
           if [[ ! "$HEAD_REF" =~ ^deps/ ]]; then
             echo "Not a dependency branch, skipping hold check."
             exit 0
@@ -35,9 +42,12 @@ jobs:
 
           echo "Dependency branch detected: $HEAD_REF"
 
+          # Query current labels from the API (not the event payload, which
+          # is stale on manual re-runs)
           PR_LABELS=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.labels[].name]')
           echo "Current labels: $PR_LABELS"
 
+          # Check for on-hold label
           if echo "$PR_LABELS" | jq -e 'index("on-hold")' > /dev/null 2>&1; then
             echo "::error::This dependency update is on hold. The on-hold label will be automatically removed after the hold period expires."
             exit 1
