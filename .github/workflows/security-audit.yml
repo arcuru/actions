@@ -1,0 +1,99 @@
+# Reusable workflow: run `cargo deny check advisories` and open/close a
+# tracking GitHub issue based on whether advisories are present.
+# Caller repo must have `.config/deny.toml` and cargo-deny available
+# in `nix develop`.
+# See README.md for caller wrapper example.
+
+name: "Deps: Security Audit"
+
+on:
+  workflow_call:
+    inputs: {}
+    # No secrets required — uses the workflow's built-in GITHUB_TOKEN.
+
+concurrency:
+  group: deps-security-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Advisory Check
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'arcuru'
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nix
+        uses: arcuru/actions/.github/actions/setup-nix@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+
+      - name: Check advisories
+        id: audit
+        run: |
+          set +e
+          OUTPUT=$(nix develop --command cargo deny check --config .config/deny.toml advisories 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+          {
+            echo "output<<AUDIT_EOF"
+            echo "$OUTPUT"
+            echo "AUDIT_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Find existing issue
+        id: find_issue
+        run: |
+          ISSUE_NUMBER=$(gh issue list --label security --state open --search "Security Advisory Alert" --json number --jq '.[0].number // empty')
+          echo "number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create or update issue on failure
+        if: steps.audit.outputs.exit_code != '0'
+        run: |
+          TITLE="Security Advisory Alert"
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          BODY=$(cat <<'ISSUE_EOF'
+          ## Security Advisory Found
+
+          `cargo deny check advisories` found active advisories in dependencies.
+
+          <details>
+          <summary>Full output</summary>
+
+          ```
+          __AUDIT_OUTPUT__
+          ```
+
+          </details>
+
+          **Action required:** Review the advisories above and update affected dependencies or add ignore entries to `.config/deny.toml` if appropriate.
+
+          _Last checked: __TIMESTAMP___
+          ISSUE_EOF
+          )
+          BODY="${BODY//__TIMESTAMP__/$TIMESTAMP}"
+          BODY="${BODY//__AUDIT_OUTPUT__/$AUDIT_OUTPUT}"
+
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue edit "$ISSUE_NUMBER" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label security
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUDIT_OUTPUT: ${{ steps.audit.outputs.output }}
+          ISSUE_NUMBER: ${{ steps.find_issue.outputs.number }}
+
+      - name: Close issue on success
+        if: steps.audit.outputs.exit_code == '0' && steps.find_issue.outputs.number != ''
+        run: |
+          gh issue close "$ISSUE_NUMBER" --comment "All advisories resolved. Closing automatically."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ steps.find_issue.outputs.number }}

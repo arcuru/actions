@@ -1,0 +1,99 @@
+# Reusable workflow: run `cargo update`, open or refresh a deps PR.
+# See README.md for caller wrapper example.
+
+name: "Deps: Cargo Update"
+
+on:
+  workflow_call:
+    inputs:
+      hold-days:
+        description: "Days to hold before allowing merge"
+        required: false
+        default: "7"
+        type: string
+    secrets:
+      PAT_TOKEN:
+        description: "Fine-grained PAT with contents:write + pull-requests:write on the calling repo. Required so the resulting PR can trigger downstream workflows."
+        required: true
+
+concurrency:
+  group: deps-cargo-update
+  cancel-in-progress: true
+
+jobs:
+  cargo-update:
+    name: Cargo Update
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'arcuru'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Nix
+        uses: arcuru/actions/.github/actions/setup-nix@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+
+      - name: Setup deps branch
+        uses: arcuru/actions/.github/actions/setup-deps-branch@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+        with:
+          branch: deps/cargo-update
+
+      - name: Run cargo update
+        id: update
+        run: |
+          OUTPUT=$(nix develop --command cargo update 2>&1)
+          echo "$OUTPUT"
+          {
+            echo "output<<UPDATE_EOF"
+            echo "$OUTPUT"
+            echo "UPDATE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Capture diff stats
+        id: diff
+        run: |
+          if ! git diff --quiet Cargo.lock; then
+            DIFF=$(git diff --stat Cargo.lock)
+            {
+              echo "stat<<DIFF_EOF"
+              echo "$DIFF"
+              echo "DIFF_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and create PR
+        uses: arcuru/actions/.github/actions/commit-and-pr@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+        with:
+          branch: deps/cargo-update
+          files: Cargo.lock
+          commit-message: "chore(deps): update cargo dependencies"
+          pr-title: "chore(deps): update cargo dependencies"
+          pr-body: |
+            ## Cargo Dependency Update
+
+            Monthly `cargo update` of `Cargo.lock` dependencies.
+
+            <details>
+            <summary>cargo update output</summary>
+
+            ```
+            ${{ steps.update.outputs.output }}
+            ```
+
+            </details>
+
+            <details>
+            <summary>Diff stats</summary>
+
+            ```
+            ${{ steps.diff.outputs.stat }}
+            ```
+
+            </details>
+          hold-days: ${{ inputs.hold-days }}
+          update-comment: "Updated with latest `cargo update` results."
+          github-token: ${{ secrets.PAT_TOKEN }}

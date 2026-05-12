@@ -1,0 +1,131 @@
+# Reusable workflow: run `nix flake update`, open or refresh a deps PR.
+# See README.md for caller wrapper example.
+
+name: "Deps: Flake Update"
+
+on:
+  workflow_call:
+    inputs:
+      hold-days:
+        description: "Days to hold before allowing merge"
+        required: false
+        default: "7"
+        type: string
+    secrets:
+      PAT_TOKEN:
+        description: "Fine-grained PAT with contents:write + pull-requests:write on the calling repo."
+        required: true
+
+concurrency:
+  group: deps-flake-update
+  cancel-in-progress: true
+
+jobs:
+  flake-update:
+    name: Flake Update
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'arcuru'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Nix
+        uses: arcuru/actions/.github/actions/setup-nix@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+
+      - name: Setup deps branch
+        uses: arcuru/actions/.github/actions/setup-deps-branch@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+        with:
+          branch: deps/flake-update
+
+      - name: Capture pre-update metadata
+        id: before
+        run: |
+          METADATA=$(nix flake metadata --json)
+          echo "$METADATA" > /tmp/flake-metadata-before.json
+
+      - name: Run flake update
+        id: update
+        run: |
+          OUTPUT=$(nix flake update 2>&1)
+          echo "$OUTPUT"
+          {
+            echo "output<<UPDATE_EOF"
+            echo "$OUTPUT"
+            echo "UPDATE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate input diff summary
+        id: summary
+        run: |
+          BEFORE=/tmp/flake-metadata-before.json
+          AFTER_JSON=$(nix flake metadata --json)
+
+          SUMMARY=""
+
+          for INPUT in $(echo "$AFTER_JSON" | jq -r '.locks.nodes.root.inputs | keys[]'); do
+            NODE=$(echo "$AFTER_JSON" | jq -r ".locks.nodes.root.inputs[\"$INPUT\"]")
+            if echo "$AFTER_JSON" | jq -e ".locks.nodes[\"$NODE\"].locked" > /dev/null 2>&1; then
+              AFTER_REV=$(echo "$AFTER_JSON" | jq -r ".locks.nodes[\"$NODE\"].locked.rev // empty")
+              AFTER_TYPE=$(echo "$AFTER_JSON" | jq -r ".locks.nodes[\"$NODE\"].locked.type // empty")
+              AFTER_OWNER=$(echo "$AFTER_JSON" | jq -r ".locks.nodes[\"$NODE\"].locked.owner // empty")
+              AFTER_REPO=$(echo "$AFTER_JSON" | jq -r ".locks.nodes[\"$NODE\"].locked.repo // empty")
+            else
+              continue
+            fi
+
+            BEFORE_REV=$(jq -r ".locks.nodes[\"$NODE\"].locked.rev // empty" "$BEFORE" 2>/dev/null)
+
+            if [ -n "$BEFORE_REV" ] && [ -n "$AFTER_REV" ] && [ "$BEFORE_REV" != "$AFTER_REV" ]; then
+              SHORT_BEFORE="${BEFORE_REV:0:7}"
+              SHORT_AFTER="${AFTER_REV:0:7}"
+              if [ "$AFTER_TYPE" = "github" ] && [ -n "$AFTER_OWNER" ] && [ -n "$AFTER_REPO" ]; then
+                COMPARE_URL="https://github.com/$AFTER_OWNER/$AFTER_REPO/compare/${BEFORE_REV}...${AFTER_REV}"
+                SUMMARY="${SUMMARY}- **${INPUT}**: [\`${SHORT_BEFORE}\` → \`${SHORT_AFTER}\`](${COMPARE_URL})\n"
+              else
+                SUMMARY="${SUMMARY}- **${INPUT}**: \`${SHORT_BEFORE}\` → \`${SHORT_AFTER}\`\n"
+              fi
+            fi
+          done
+
+          if [ -z "$SUMMARY" ]; then
+            SUMMARY="No input revisions changed (lock file metadata update only)."
+          fi
+
+          {
+            echo "text<<SUMMARY_EOF"
+            echo -e "$SUMMARY"
+            echo "SUMMARY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit and create PR
+        uses: arcuru/actions/.github/actions/commit-and-pr@8ace6a616f7dc9c2630a1fd7e95ab976cb681608 # v0.1.0
+        with:
+          branch: deps/flake-update
+          files: flake.lock
+          commit-message: "chore(deps): update flake inputs"
+          pr-title: "chore(deps): update flake inputs"
+          pr-body: |
+            ## Flake Input Update
+
+            Monthly `nix flake update` of Nix dependencies.
+
+            ### Input Changes
+
+            ${{ steps.summary.outputs.text }}
+
+            <details>
+            <summary>nix flake update output</summary>
+
+            ```
+            ${{ steps.update.outputs.output }}
+            ```
+
+            </details>
+          hold-days: ${{ inputs.hold-days }}
+          update-comment: "Updated with latest `nix flake update` results."
+          github-token: ${{ secrets.PAT_TOKEN }}
