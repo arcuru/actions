@@ -13,7 +13,7 @@ Pinning is by full commit SHA, with a trailing version comment that matches the 
 
 | Action | Purpose |
 |---|---|
-| [`setup-nix`](.github/actions/setup-nix/action.yml) | Install Nix with `nix-installer-action`, enable Magic Nix Cache, install `nix-fast-build`. |
+| [`setup-nix`](.github/actions/setup-nix/action.yml) | Install Nix with `nix-installer-action`, optionally enable Magic Nix Cache, optionally configure a custom binary cache (substituters / trusted keys / push), install `nix-fast-build`. |
 | [`setup-deps-branch`](.github/actions/setup-deps-branch/action.yml) | Create a new `deps/<name>` branch, or rebase an existing one onto `main`. Falls back to `reset --hard` on rebase conflict. |
 | [`commit-and-pr`](.github/actions/commit-and-pr/action.yml) | Stage, commit, push, and open or update a PR with `dependencies` + `on-hold` labels and a `hold-until: YYYY-MM-DD` body marker. |
 
@@ -24,6 +24,18 @@ Reference one from any workflow:
 ```
 
 The trailing version comment is required — the `actions-update` workflow uses it to find the next release tag.
+
+### `setup-nix` inputs
+
+| Input | Default | Purpose |
+|---|---|---|
+| `enable-magic-cache` | `"true"` | Toggle the DeterminateSystems Magic Nix Cache step. Set to `"false"` if you only want a custom cache. |
+| `extra-substituters` | `""` | Newline-separated substituter URLs appended to the Nix config (e.g. `https://cache.eidetica.dev`). |
+| `extra-trusted-public-keys` | `""` | Newline-separated trusted public keys for those substituters. Required when `extra-substituters` is set. |
+| `signing-key` | `""` | Nix store signing key PEM body. When paired with `push-target`, the action exposes a `push-args` output containing `nix-fast-build` flags for cache push. |
+| `push-target` | `""` | Cache push destination URL (e.g. `s3://my-cache?region=auto&endpoint=…`). |
+
+Output `push-args` is empty unless both `signing-key` and `push-target` are set; pass it to `nix-fast-build` to push built paths back into the cache in the same step.
 
 ## Reusable workflows
 
@@ -37,6 +49,23 @@ All six follow the same calling convention: each consumer repo ships a thin wrap
 | [`security-audit`](.github/workflows/security-audit.yml) | `schedule` (daily) | — | `cargo deny check advisories`; opens a tracking issue on hit, closes it on resolution |
 | [`dependency-hold`](.github/workflows/dependency-hold.yml) | `pull_request` | — | Fails any PR on a `deps/*` branch that still has the `on-hold` label |
 | [`update-hold`](.github/workflows/update-hold.yml) | `schedule` (daily) | — | Removes `on-hold` once the PR's `hold-until: YYYY-MM-DD` marker has passed |
+
+### Common inputs
+
+Every reusable workflow accepts these optional overrides (defaults preserve the simplest behaviour):
+
+| Input | Default | Purpose |
+|---|---|---|
+| `runs-on` | `ubuntu-latest` | Override the runner. Example: `ubicloud-standard-2`. |
+| `environment` | `""` | Attach the job to a GitHub Actions environment so approval rules and env-scoped secrets apply. |
+
+Nix-using workflows (cargo-update, flake-update, actions-update, security-audit) additionally accept:
+
+| Input | Default | Purpose |
+|---|---|---|
+| `enable-magic-cache` | `"true"` | Toggle DeterminateSystems Magic Nix Cache. |
+| `extra-substituters` | `""` | Newline-separated extra substituter URLs. |
+| `extra-trusted-public-keys` | `""` | Newline-separated trusted public keys. |
 
 ### Wrapper examples
 
@@ -66,6 +95,22 @@ jobs:
     uses: arcuru/actions/.github/workflows/cargo-update.yml@<sha>  # vX.Y.Z
     with:
       hold-days: ${{ inputs.hold_days || '7' }}
+    secrets:
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+```
+
+**Repo using a custom Nix cache** (eidetica-style):
+
+```yaml
+jobs:
+  cargo-update:
+    uses: arcuru/actions/.github/workflows/cargo-update.yml@<sha>  # vX.Y.Z
+    with:
+      runs-on: ubicloud-standard-2
+      environment: automation
+      enable-magic-cache: "false"
+      extra-substituters: https://cache.eidetica.dev
+      extra-trusted-public-keys: cache.eidetica.dev-1:eND5gRJlbnool3ZLCWT2H8kkygWS8JcsU76HYXbWPBI=
     secrets:
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 ```
