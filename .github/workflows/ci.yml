@@ -1,0 +1,34 @@
+# Validate this repo's own workflow YAML on every PR and on push to main.
+# actionlint is installed via Nix (reusing our own setup-nix composite action),
+# so this also exercises the setup-nix action end-to-end on every PR.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nix
+        uses: ./.github/actions/setup-nix
+
+      - name: Run actionlint
+        run: nix run nixpkgs#actionlint -- -color .github/workflows/*.yml
