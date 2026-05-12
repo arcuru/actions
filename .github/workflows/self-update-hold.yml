@@ -1,0 +1,16 @@
+# Self-dogfood: remove the on-hold label from this repo's own deps/*
+# PRs once their hold-until date is reached.
+name: "Self: update-hold"
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: ./.github/workflows/update-hold.yml
+    secrets: inherit

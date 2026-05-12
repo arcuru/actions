@@ -1,0 +1,27 @@
+# Self-dogfood: keep this repo's own SHA pins fresh.
+# Bumps actions/checkout, DeterminateSystems/*, etc. inside our own
+# workflow files. Does NOT bump path-prefixed self-references
+# (arcuru/actions/.github/actions/...) — those need a manual bump
+# until actions-update's regex grows the second shape.
+name: "Self: actions-update"
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+    inputs:
+      hold_days:
+        description: "Days to hold before allowing merge"
+        required: false
+        default: "7"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: ./.github/workflows/actions-update.yml
+    with:
+      hold-days: ${{ inputs.hold_days || '7' }}
+    secrets: inherit

@@ -1,0 +1,16 @@
+# Self-dogfood: fail PRs on this repo's own deps/* branches while
+# they still carry the on-hold label.
+name: "Self: dependency-hold"
+
+on:
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: ./.github/workflows/dependency-hold.yml
+    secrets: inherit
