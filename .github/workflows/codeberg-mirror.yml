@@ -1,0 +1,82 @@
+# Mirror the caller repository to a Codeberg (Forgejo) remote over SSH.
+# Replaces yesolutions/mirror-action: no third-party Docker container with
+# the deploy key in scope, real host-key verification (ed25519 pinned with
+# HostKeyAlgorithms enforced), and a refspec that maps the local
+# remote-tracking refs into the destination's refs/heads/* (so the push
+# survives Forgejo's policy of rejecting refs outside refs/heads, refs/tags
+# and refusing deletion of the default branch).
+#
+name: "Codeberg Mirror"
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: "Runner label or JSON list. Default: ubuntu-latest."
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      environment:
+        description: "GitHub Actions environment name for the job (use this to scope the ssh-private-key secret)."
+        required: false
+        default: ""
+        type: string
+      destination:
+        description: "Mirror destination, e.g. git@codeberg.org:arcuru/<repo>.git."
+        required: true
+        type: string
+      host:
+        description: "Mirror SSH host. Default: codeberg.org."
+        required: false
+        default: "codeberg.org"
+        type: string
+      host-key:
+        description: "Full known_hosts line for the destination host. Default: codeberg.org ed25519."
+        required: false
+        default: "codeberg.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIVIC02vnjFyL+I4RHfvIGNtOgJMe769VTF1VR4EB3ZB"
+        type: string
+      host-key-algorithm:
+        description: "Algorithm to require via HostKeyAlgorithms. Must match the host-key entry."
+        required: false
+        default: "ssh-ed25519"
+        type: string
+    secrets:
+      ssh-private-key:
+        description: "Private SSH key authorised to push to the destination."
+        required: true
+
+jobs:
+  mirror:
+    runs-on: ${{ inputs.runs-on }}
+    environment: ${{ inputs.environment }}
+    if: github.repository_owner == 'arcuru'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Mirror to ${{ inputs.host }}
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ssh-private-key }}
+          DESTINATION: ${{ inputs.destination }}
+          HOST_KEY: ${{ inputs.host-key }}
+          HOST_KEY_ALGORITHM: ${{ inputs.host-key-algorithm }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          install -m 600 /dev/null "$HOME/.ssh/id_mirror"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_mirror"
+
+          install -m 600 /dev/null "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$HOST_KEY" > "$HOME/.ssh/known_hosts"
+
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/id_mirror -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o HostKeyAlgorithms=$HOST_KEY_ALGORITHM"
+          git remote add mirror "$DESTINATION"
+          # Map the local remote-tracking refs (what actions/checkout produces)
+          # into the destination's refs/heads/* namespace, and prune only inside
+          # that namespace. `git push --mirror` would push refs/remotes/origin/*
+          # verbatim (Forgejo rejects refs outside refs/heads, refs/tags) and
+          # would prune real branches whose names don't match the locally
+          # checked-out branch.
+          git push --tags --force --prune mirror "+refs/remotes/origin/*:refs/heads/*"

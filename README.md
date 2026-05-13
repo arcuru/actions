@@ -49,6 +49,7 @@ All six follow the same calling convention: each consumer repo ships a thin wrap
 | [`security-audit`](.github/workflows/security-audit.yml) | `schedule` (daily) | — | `cargo deny check advisories`; opens a tracking issue on hit, closes it on resolution |
 | [`dependency-hold`](.github/workflows/dependency-hold.yml) | `pull_request` | — | Fails any PR on a `deps/*` branch that still has the `on-hold` label |
 | [`update-hold`](.github/workflows/update-hold.yml) | `schedule` (daily) | — | Removes `on-hold` once the PR's `hold-until: YYYY-MM-DD` marker has passed |
+| [`codeberg-mirror`](.github/workflows/codeberg-mirror.yml) | `push` | `ssh-private-key` | Mirror the caller repo to a Codeberg/Forgejo destination over SSH with ed25519 host-key pinning |
 
 ### Common inputs
 
@@ -152,6 +153,30 @@ jobs:
     uses: arcuru/actions/.github/workflows/dependency-hold.yml@<sha>  # vX.Y.Z
     secrets: inherit
 ```
+
+**`codeberg-mirror.yml`** (push-triggered):
+
+```yaml
+name: "Codeberg Sync"
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    uses: arcuru/actions/.github/workflows/codeberg-mirror.yml@<sha>  # vX.Y.Z
+    with:
+      environment: mirror
+      destination: git@codeberg.org:arcuru/<repo>.git
+    secrets:
+      ssh-private-key: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
+```
+
+`codeberg-mirror` accepts `host`, `host-key`, and `host-key-algorithm` overrides for non-default forges or rotated keys. The destination repo must already exist on Codeberg; the deploy key for `secrets.ssh-private-key` must have write access. The mirror push uses `+refs/remotes/origin/*:refs/heads/*` with `--prune` scoped to that namespace, so deleted GitHub branches propagate to Codeberg without touching anything outside `refs/heads/*`.
 
 ### Prerequisites in the consumer repo
 
