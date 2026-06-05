@@ -89,16 +89,20 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   cargo-update:
     uses: arcuru/actions/.github/workflows/cargo-update.yml@<sha>  # vX.Y.Z
     with:
       hold-days: ${{ inputs.hold_days || '7' }}
-    secrets:
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+    secrets: inherit
 ```
+
+The caller's top-level `permissions:` must grant at least what the reusable workflow's job declares (`contents: write` + `pull-requests: write`); the called job is capped by the caller's grant.
+
+`secrets: inherit` works whether `PAT_TOKEN` is a repo secret or scoped to the environment passed via the `environment:` input. The explicit form `secrets: PAT_TOKEN: ${{ secrets.PAT_TOKEN }}` only resolves repo-scoped secrets — env-scoped secrets read as empty in caller scope and the reusable workflow's `actions/checkout` fails with `Input required and not supplied: token`.
 
 **Repo using a custom Nix cache** (eidetica-style):
 
@@ -112,8 +116,7 @@ jobs:
       enable-magic-cache: "false"
       extra-substituters: https://cache.eidetica.dev
       extra-trusted-public-keys: cache.eidetica.dev-1:eND5gRJlbnool3ZLCWT2H8kkygWS8JcsU76HYXbWPBI=
-    secrets:
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+    secrets: inherit
 ```
 
 **`security-audit.yml`** (also the pattern for `update-hold` — schedule-triggered, no secrets):
@@ -183,7 +186,7 @@ jobs:
 - `cargo-update` and `security-audit` need `nix develop --command cargo …` to work — i.e. a `flake.nix` with `cargo` (and for security-audit, `cargo-deny`) in the dev shell.
 - `flake-update` needs `flake.nix` + `flake.lock`.
 - `security-audit` needs `.config/deny.toml`.
-- `cargo-update` / `flake-update` / `actions-update` need a fine-grained `PAT_TOKEN` repo-level secret with `contents:write` + `pull-requests:write` on the calling repo. (The default `GITHUB_TOKEN` can't trigger downstream workflow runs, which would silently break the deps-hold check.)
+- `cargo-update` / `flake-update` / `actions-update` need a fine-grained `PAT_TOKEN` with `contents:write` + `pull-requests:write` on the calling repo. Store it as either a repo secret or as an environment secret scoped to the env passed via the `environment:` input — both work with `secrets: inherit`. (The default `GITHUB_TOKEN` can't trigger downstream workflow runs, which would silently break the deps-hold check.)
 - The `on-hold` and `dependencies` labels need to exist in the repo (the deps PRs use them).
 - `Allow GitHub Actions to create and approve pull requests` must be enabled in Settings → Actions → General.
 
