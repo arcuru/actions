@@ -25,4 +25,5 @@ jobs:
     uses: ./.github/workflows/actions-update.yml
     with:
       hold-days: ${{ inputs.hold_days || '7' }}
+      environment: automation
     secrets: inherit
