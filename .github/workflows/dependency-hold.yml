@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read # required for `gh api .../pulls/N` label query below
 
 concurrency:
   group: deps-hold-gate-${{ github.event.pull_request.number }}
