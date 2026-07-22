@@ -1,0 +1,74 @@
+# Discovers SHA-pinned `uses:` references and emits them as JSON.
+#
+# Split out from verification so the updater and the verifier share one
+# definition of what a pin is and where pins live. Supports scanning either the
+# checked-out working directory or an arbitrary remote ref via the API, the
+# latter so callers can inspect a PR head without checking it out.
+name: "Scan Action Pins"
+description: "Discover SHA-pinned `uses:` references in workflows and composite actions, as JSON."
+
+inputs:
+  repository:
+    description: "Repository to scan remotely (OWNER/REPO). Omit to scan the working directory."
+    required: false
+    default: ""
+  ref:
+    description: "Ref or SHA to scan when `repository` is set."
+    required: false
+    default: ""
+  github-token:
+    description: "Token used for API lookups."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  pins:
+    description: "JSON array of {file, owner, repo, subpath, ref, tag, class, ref_kind}."
+    value: ${{ steps.scan.outputs.pins }}
+  count:
+    description: "Number of `uses:` references found."
+    value: ${{ steps.scan.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Scan pins
+      id: scan
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        SCAN_REPOSITORY: ${{ inputs.repository }}
+        SCAN_REF: ${{ inputs.ref }}
+      run: |
+        set -uo pipefail
+        source "${GITHUB_ACTION_PATH}/pins-lib.sh"
+
+        if [ -n "$SCAN_REPOSITORY" ]; then
+          if [ -z "$SCAN_REF" ]; then
+            echo '::error::scan-pins: the `ref` input is required when `repository` is set.'
+            exit 1
+          fi
+          echo "Scanning ${SCAN_REPOSITORY}@${SCAN_REF} via the API."
+          # A scan that could not complete must fail the step. Callers gate merges
+          # on this output, and an empty list reads as "nothing to worry about".
+          if ! PINS=$(pins_scan_remote "$SCAN_REPOSITORY" "$SCAN_REF"); then
+            echo '::error::scan-pins: could not read the target ref; refusing to report an empty scan.'
+            exit 1
+          fi
+        else
+          echo "Scanning the working directory."
+          if ! PINS=$(pins_scan_local); then
+            echo '::error::scan-pins: local scan failed.'
+            exit 1
+          fi
+        fi
+
+        COUNT=$(echo "$PINS" | jq 'length')
+        echo "Found ${COUNT} pinned \`uses:\` references."
+
+        {
+          echo "count=${COUNT}"
+          echo "pins<<SCAN_PINS_EOF"
+          echo "$PINS"
+          echo "SCAN_PINS_EOF"
+        } >> "$GITHUB_OUTPUT"
