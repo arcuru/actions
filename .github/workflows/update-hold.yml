@@ -126,7 +126,7 @@ jobs:
       - name: Scan pins at PR head
         id: scan
         if: inputs.verify-pins == 'true'
-        uses: arcuru/actions/.github/actions/scan-pins@671b41ca17cc4c935be2c4185ee29094348e39cb # main
+        uses: arcuru/actions/.github/actions/scan-pins@6568fce9d9e09782fcec9d9653411b35075c7902 # main
         with:
           repository: ${{ github.repository }}
           ref: ${{ matrix.pr.head_sha }}
@@ -134,7 +134,7 @@ jobs:
       - name: Verify pins
         id: verify
         if: inputs.verify-pins == 'true'
-        uses: arcuru/actions/.github/actions/verify-pins@671b41ca17cc4c935be2c4185ee29094348e39cb # main
+        uses: arcuru/actions/.github/actions/verify-pins@6568fce9d9e09782fcec9d9653411b35075c7902 # main
         with:
           pins: ${{ steps.scan.outputs.pins }}
 
