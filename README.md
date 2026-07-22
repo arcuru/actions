@@ -16,6 +16,8 @@ Pinning is by full commit SHA, with a trailing version comment that matches the 
 | [`setup-nix`](.github/actions/setup-nix/action.yml) | Install Nix with `nix-installer-action`, optionally enable Magic Nix Cache, optionally configure a custom binary cache (substituters / trusted keys / push), install `nix-fast-build`. |
 | [`setup-deps-branch`](.github/actions/setup-deps-branch/action.yml) | Create a new `deps/<name>` branch, or rebase an existing one onto `main`. Falls back to `reset --hard` on rebase conflict. |
 | [`commit-and-pr`](.github/actions/commit-and-pr/action.yml) | Stage, commit, push, and open or update a PR with `dependencies` + `on-hold` labels and a `hold-until: YYYY-MM-DD` body marker. |
+| [`scan-pins`](.github/actions/scan-pins/action.yml) | Discover SHA-pinned `uses:` references across workflows and composite-action manifests, as JSON. Scans the working directory, or any remote ref via the API without a checkout. |
+| [`verify-pins`](.github/actions/verify-pins/action.yml) | Check scanned pins for re-pointed upstream tags and published security advisories. |
 
 Reference one from any workflow:
 
@@ -48,7 +50,8 @@ All six follow the same calling convention: each consumer repo ships a thin wrap
 | [`actions-update`](.github/workflows/actions-update.yml) | `schedule` (monthly) | `PAT_TOKEN` | Bump every SHA-pinned `uses:` in `.github/workflows/` to the latest release tag |
 | [`security-audit`](.github/workflows/security-audit.yml) | `schedule` (daily) | — | `cargo deny check advisories`; opens a tracking issue on hit, closes it on resolution |
 | [`dependency-hold`](.github/workflows/dependency-hold.yml) | `pull_request` | — | Fails any PR on a `deps/*` branch that still has the `on-hold` label |
-| [`update-hold`](.github/workflows/update-hold.yml) | `schedule` (daily) | — | Removes `on-hold` once the PR's `hold-until: YYYY-MM-DD` marker has passed |
+| [`update-hold`](.github/workflows/update-hold.yml) | `schedule` (daily) | — | Removes `on-hold` once the PR's `hold-until: YYYY-MM-DD` marker has passed **and** the PR's pinned actions verify |
+| [`pin-audit`](.github/workflows/pin-audit.yml) | `schedule` (daily) | — | Re-resolves every pinned action against upstream tags and the advisory database; opens a tracking issue on hit, closes it on resolution |
 | [`codeberg-mirror`](.github/workflows/codeberg-mirror.yml) | `push` | `ssh-private-key` | Mirror the caller repo to a Codeberg/Forgejo destination over SSH with ed25519 host-key pinning |
 
 ### Common inputs
@@ -196,7 +199,89 @@ jobs:
 - **`PAT_TOKEN` is scoped per consumer**, not shared. Each repo that wants the PR-creating deps automation needs its own fine-grained PAT covering only that repo, with the minimum scopes (`contents:write` + `pull-requests:write`).
 - **All `uses:` lines pin a full commit SHA**, with the version comment used by `actions-update` for bumps. Mutable tags like `@v1` are forbidden.
 - **No `${{ }}` interpolation inside `run:` blocks**: untrusted values reach the shell via `env:` only. This is enforced inside this repo and is the rule callers should follow too.
+- **Pins are verified, not just recorded.** `pin-audit` re-resolves every pinned immutable tag daily, and `update-hold` re-verifies a PR before releasing its hold. See [Pin verification](#pin-verification).
 - **Fork-fenced**: every workflow's privileged job has `if: github.repository_owner == 'arcuru'`. Forks running re-enabled copies of the workflow no-op cleanly.
+
+## Pin verification
+
+Pinning by SHA stops a moved tag from changing what CI runs. It does not tell you
+when a tag *has* moved — and that is the signal worth having.
+
+Every recent GitHub Actions supply-chain compromise (tj-actions/changed-files,
+reviewdog/action-setup, aquasecurity/trivy-action) worked the same way: the
+attacker force-pushed existing release tags to malicious commits. A SHA-pinned
+consumer keeps running the original commit, so it is protected — but it is also
+unaware. The divergence between "the SHA I pinned" and "the commit that tag serves" is
+visible immediately from public API data, days before an advisory is
+published.
+
+Three checks run over every discovered reference:
+
+**Pin integrity.** Re-resolve the version comment upstream and compare it to the
+pinned SHA. Severity depends on what kind of tag it is, which is the difference
+between a usable signal and constant noise:
+
+| Comment | Class | A mismatch means |
+|---|---|---|
+| `v7.0.0` | immutable | **critical** — a release tag was re-pointed or deleted |
+| `v2`, `v2.9` | mutable | informational — floating tags are republished by design |
+| `master`, `main` | branch | **critical** if the name is not a real branch, or the commit is not reachable from it |
+| anything else | unknown | **warning** — nothing resolvable to compare against |
+| *(not a SHA at all)* | unpinned | **critical** — `@v4`/`@main` can be replaced upstream with no change here |
+| *(none)* | unverifiable | warning — nothing to compare against |
+
+Floating tags really do move: `Swatinem/rust-cache@v2` and
+`codecov/codecov-action@v5` have both been republished. Failing on those would
+make the audit unreadable within a week, so only exact semver tags are treated as
+immutable.
+
+Branch-tracking pins name a branch where a version would go (`# main`,
+`# master`). There is no fixed SHA to expect, but two things are checkable:
+that the name is a real branch and not a tag (the compare endpoint resolves
+tags too, so a tag name would otherwise pass as though it were a branch), and
+that the commit is reachable from it. A commit that never landed on the branch,
+because it was squashed away or force-pushed over, resolves and vanishes when
+that line is garbage collected. This repo's own references track `main` this way:
+they are an implementation detail of the reusable workflows, not part of the
+released interface, so coupling them to release tags only creates a bootstrap
+problem every time a new action is added.
+
+**Reference resolvability.** Confirm the action or reusable workflow actually
+exists at the pinned commit. A pin can be internally consistent — the SHA really
+is what its tag resolves to — while naming a path that is not present there,
+which otherwise fails only at run time.
+
+**Advisory lookup.** Query the GitHub Advisory Database. An exact version is
+queried as `OWNER/REPO@VERSION`, so a reference on a patched release is not
+reported against an advisory it is not subject to. Without a usable version only
+the repository-wide query is available, and its results are warnings rather than
+criticals, because they may describe a release the reference is not on.
+
+These checks are consumed in two places, differing in what they look at rather
+than in what they detect. `pin-audit` runs them daily over every pin on the
+default branch, so a pin stays covered for as long as it is in the tree — which
+is what catches a tag re-pointed, or an advisory published, long after the PR
+that introduced the pin was merged. `update-hold` runs them against a PR's head
+before releasing its hold, so aging a dependency PR actually inspects it instead
+of only waiting.
+
+### What this does not cover
+
+The strong guarantee applies to exact-version pins. A `v7.0.0` comment fixes a
+commit that can be re-checked forever, so tampering shows up. Floating tags and
+branch pins have no fixed SHA to expect, so drift there is reported but never
+fails — an attacker who force-pushes `v9`, or the branch a pin tracks, *before*
+the updater next runs produces a reference that verifies as consistent. Pinning
+to exact versions is what buys the protection; the other classes get
+resolvability and advisory coverage only.
+
+No check here detects a backdoor committed by a legitimate maintainer into a
+normal release: no tag moves and no advisory exists. These detect tag tampering,
+references that cannot resolve, unpinned references, and published advisories.
+
+An upstream lookup that cannot be completed is reported as a warning, never as a
+pass and never as a compromise, so a rate limit neither certifies a reference nor
+raises a false alarm across every pin at once.
 
 ## Releases
 
@@ -206,7 +291,9 @@ Breaking changes (input renames, removed secrets, schema changes) bump the major
 
 ## Known limitations
 
-- `actions-update`'s regex parses the `OWNER/REPO@SHA # vX.Y.Z` shape used for everything but doesn't yet handle the path-prefixed `OWNER/REPO/PATH@SHA # vX.Y.Z` shape this repo uses for its own composite-action references inside the reusable workflows. Path-prefixed pins must be bumped by hand until the regex grows the second form. Filed as TODO inside the reusable `actions-update.yml`.
+- Pin verification only covers refs pinned to a SHA *with* a version comment. A pin with no comment cannot be compared against anything and is reported as a warning rather than checked.
+- Pin verification cannot detect a backdoor introduced by a legitimate maintainer in a normal release — no tag moves and no advisory exists. It detects tag tampering and published advisories, which is what the recent Actions compromises actually looked like.
+- `pin-audit` and `update-hold` reference the `scan-pins` / `verify-pins` actions by SHA. When cutting a release that changes those actions, re-pin those references to the release commit.
 - The `cargo-update` workflow assumes a single-package crate at the repo root (`Cargo.lock` only). Workspaces with multiple lockfiles need an extension.
 - `flake-update`'s per-input compare URL only works when the input source is a `github:` flake ref. Other types (`git+ssh://`, `path:`, `tarball:`) fall back to bare-SHA display.
 

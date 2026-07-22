@@ -1,0 +1,62 @@
+# Verifies SHA-pinned `uses:` references against upstream tags and the GitHub
+# Advisory Database. See verify.sh for what each check means and why.
+#
+# Consumes the JSON emitted by the scan-pins action, so the set of files and
+# refs considered stays defined in exactly one place.
+name: "Verify Action Pins"
+description: "Check pinned actions for re-pointed tags and published security advisories."
+
+inputs:
+  pins:
+    description: "JSON array from the scan-pins action."
+    required: true
+  github-token:
+    description: "Token used for API lookups."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  status:
+    description: "ok, warning, or critical."
+    value: ${{ steps.verify.outputs.status }}
+  critical:
+    description: "Count of critical findings."
+    value: ${{ steps.verify.outputs.critical }}
+  warning:
+    description: "Count of warnings."
+    value: ${{ steps.verify.outputs.warning }}
+  checked:
+    description: "Number of distinct pins verified."
+    value: ${{ steps.verify.outputs.checked }}
+  total:
+    description: "Number of `uses:` references those pins came from."
+    value: ${{ steps.verify.outputs.total }}
+  report:
+    description: "Markdown report of all findings."
+    value: ${{ steps.verify.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify pins
+      id: verify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PINS_JSON: ${{ inputs.pins }}
+      run: |
+        set -uo pipefail
+        printf '%s' "$PINS_JSON" > "${RUNNER_TEMP}/pins.json"
+        bash "${GITHUB_ACTION_PATH}/verify.sh" "${RUNNER_TEMP}/pins.json"
+
+    - name: Summary
+      shell: bash
+      env:
+        REPORT: ${{ steps.verify.outputs.report }}
+        STATUS: ${{ steps.verify.outputs.status }}
+      run: |
+        {
+          echo "## Action pin verification — ${STATUS}"
+          echo
+          echo "$REPORT"
+        } >> "$GITHUB_STEP_SUMMARY"
