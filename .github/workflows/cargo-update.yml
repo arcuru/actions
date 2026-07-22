@@ -62,14 +62,14 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Setup Nix
-        uses: arcuru/actions/.github/actions/setup-nix@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
+        uses: arcuru/actions/.github/actions/setup-nix@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
           enable-magic-cache: ${{ inputs.enable-magic-cache }}
           extra-substituters: ${{ inputs.extra-substituters }}
           extra-trusted-public-keys: ${{ inputs.extra-trusted-public-keys }}
 
       - name: Setup deps branch
-        uses: arcuru/actions/.github/actions/setup-deps-branch@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
+        uses: arcuru/actions/.github/actions/setup-deps-branch@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
           branch: deps/cargo-update
 
@@ -97,7 +97,7 @@ jobs:
           fi
 
       - name: Commit and create PR
-        uses: arcuru/actions/.github/actions/commit-and-pr@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
+        uses: arcuru/actions/.github/actions/commit-and-pr@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
           branch: deps/cargo-update
           files: Cargo.lock
