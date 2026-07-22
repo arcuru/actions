@@ -3,7 +3,7 @@
 # GitHub API for latest releases,
 # and updates the SHA and version comment in-place. Handles two ref
 # shapes (OWNER/REPO@SHA and OWNER/REPO/PATH@SHA) and the
-# dtolnay/rust-toolchain master-tracking quirk. Creates a PR on the
+# branch-tracking pins (a branch name in place of a version). Creates a PR on the
 # deps/actions-update branch with a configurable hold period before
 # merge. CI handles verification via normal PR checks.
 #
@@ -67,22 +67,50 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Setup Nix
-        uses: arcuru/actions/.github/actions/setup-nix@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
+        uses: arcuru/actions/.github/actions/setup-nix@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
           enable-magic-cache: ${{ inputs.enable-magic-cache }}
           extra-substituters: ${{ inputs.extra-substituters }}
           extra-trusted-public-keys: ${{ inputs.extra-trusted-public-keys }}
 
       - name: Setup deps branch
-        uses: arcuru/actions/.github/actions/setup-deps-branch@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
+        uses: arcuru/actions/.github/actions/setup-deps-branch@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
           branch: deps/actions-update
+
+      # Discovery and parsing come from the shared scan-pins action, so the
+      # updater and the pin verifier work from one definition of what a pin is
+      # and where pins live. Verification cannot fall behind the files this job
+      # rewrites.
+      - name: Scan pins
+        id: scan
+        uses: arcuru/actions/.github/actions/scan-pins@671b41ca17cc4c935be2c4185ee29094348e39cb # main
 
       - name: Update action versions
         id: update
         run: |
           CHANGES=""
           TOUCHED=()
+
+          # A literal control character as the s/// delimiter, so a version
+          # comment containing the delimiter cannot terminate the expression.
+          SED_D=$(printf '\001')
+
+          # Escape BRE metacharacters so a version comment is matched literally
+          # rather than as a pattern ('.' in v1.2.3 would otherwise match any
+          # character).
+          bre_quote() {
+            printf '%s' "$1" | sed 's/[].[*^$\\]/\\&/g'
+          }
+
+          # Escape the replacement side, where \ and & carry meaning.
+          repl_quote() {
+            printf '%s' "$1" | sed 's/[\\&]/\\&/g'
+          }
+
+          # A lookup that fails must not read as "nothing to update".
+          LOOKUPS_OK=0
+          LOOKUPS_FAILED=0
 
           update_action() {
             local FILE="$1"
@@ -91,17 +119,29 @@ jobs:
             local SUBPATH="$4"        # empty or leading "/" then path-into-repo (e.g. /.github/actions/setup-nix)
             local CURRENT_SHA="$5"
             local CURRENT_TAG="$6"
+            local CLASS="$7"          # immutable | mutable | branch, from the shared classifier
             local DISPLAY="${OWNER}/${REPO}${SUBPATH}"
+            # Compare this file before and after, so the change list records what
+            # was actually rewritten rather than "this file is dirty".
+            local BEFORE
+            BEFORE=$(cat "$FILE")
 
-            # dtolnay/rust-toolchain uses branches, not releases; track master branch directly
-            if [ "$OWNER/$REPO" = "dtolnay/rust-toolchain" ]; then
-              NEW_SHA=$(gh api "repos/$OWNER/$REPO/branches/master" --jq '.commit.sha' 2>/dev/null || true)
+            # Branch-tracking pins carry a branch name where a version would go
+            # (dtolnay/rust-toolchain publishes no releases; this repo's own
+            # references track main). Follow that branch instead of a release.
+            if [ "$CLASS" = "branch" ]; then
+              if ! NEW_SHA=$(gh api "repos/$OWNER/$REPO/branches/$CURRENT_TAG" --jq '.commit.sha' 2>/dev/null); then
+                LOOKUPS_FAILED=$((LOOKUPS_FAILED + 1))
+                echo "::warning::could not resolve branch ${CURRENT_TAG} of ${OWNER}/${REPO}"
+                return
+              fi
+              LOOKUPS_OK=$((LOOKUPS_OK + 1))
               if [ -z "$NEW_SHA" ] || [ "$NEW_SHA" = "$CURRENT_SHA" ]; then
                 return
               fi
-              sed -i "s|${OWNER}/${REPO}${SUBPATH}@${CURRENT_SHA} # ${CURRENT_TAG}|${OWNER}/${REPO}${SUBPATH}@${NEW_SHA} # ${CURRENT_TAG}|g" "$FILE"
-              if ! git diff --quiet "$FILE"; then
-                CHANGES="${CHANGES}- \`${DISPLAY}\`: updated master SHA (in \`$(basename "$FILE")\`)\n"
+              sed -i "s${SED_D}\([\"']\{0,1\}\)${OWNER}/${REPO}${SUBPATH}@${CURRENT_SHA}\([\"']\{0,1\}\)[[:space:]]*#[[:space:]]*$(bre_quote "$CURRENT_TAG")[[:space:]]*\$${SED_D}\1${OWNER}/${REPO}${SUBPATH}@${NEW_SHA}\2 # $(repl_quote "$CURRENT_TAG")${SED_D}g" "$FILE"
+              if [ "$(cat "$FILE")" != "$BEFORE" ]; then
+                CHANGES="${CHANGES}- \`${DISPLAY}\`: updated ${CURRENT_TAG} SHA (in \`$(basename "$FILE")\`)\n"
                 TOUCHED+=("$FILE")
               fi
               return
@@ -143,47 +183,26 @@ jobs:
               return
             fi
 
-            sed -i "s|${OWNER}/${REPO}${SUBPATH}@${CURRENT_SHA} # ${CURRENT_TAG}|${OWNER}/${REPO}${SUBPATH}@${NEW_SHA} # ${LATEST}|g" "$FILE"
+            sed -i "s${SED_D}\([\"']\{0,1\}\)${OWNER}/${REPO}${SUBPATH}@${CURRENT_SHA}\([\"']\{0,1\}\)[[:space:]]*#[[:space:]]*$(bre_quote "$CURRENT_TAG")[[:space:]]*\$${SED_D}\1${OWNER}/${REPO}${SUBPATH}@${NEW_SHA}\2 # $(repl_quote "$LATEST")${SED_D}g" "$FILE"
 
-            if ! git diff --quiet "$FILE"; then
+            if [ "$(cat "$FILE")" != "$BEFORE" ]; then
               CHANGES="${CHANGES}- \`${DISPLAY}\`: ${CURRENT_TAG} → ${LATEST} (in \`$(basename "$FILE")\`)\n"
               TOUCHED+=("$FILE")
             fi
           }
 
-          # Every file that can carry a SHA-pinned `uses:` line: GitHub and
-          # Forgejo workflow definitions, plus composite action manifests
-          # (nested arbitrarily deep under .github/actions, so use find).
-          mapfile -t FILES < <(
-            find .github/workflows .forgejo/workflows -maxdepth 1 -type f \
-              \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null
-            find .github/actions -type f \
-              \( -name 'action.yml' -o -name 'action.yaml' \) 2>/dev/null
+          while IFS=$'\x1f' read -r FILE OWNER REPO SUBPATH CURRENT_SHA CURRENT_TAG CLASS REF_KIND; do
+            # Pins with no version comment cannot be rewritten in place, since
+            # the substitution keys on the trailing "# TAG". They are reported
+            # by the pin audit instead.
+            [ "$CLASS" = "none" ] && continue
+            [ "$CLASS" = "unknown" ] && continue
+            [ "$REF_KIND" != "sha" ] && continue
+            update_action "$FILE" "$OWNER" "$REPO" "$SUBPATH" "$CURRENT_SHA" "$CURRENT_TAG" "$CLASS"
+          done < <(
+            printf '%s' "$SCANNED_PINS" | jq -r '
+              .[] | [.file, .owner, .repo, .subpath, .ref, .tag, .class, .ref_kind] | join("\u001f")'
           )
-
-          for FILE in "${FILES[@]}"; do
-            [ -f "$FILE" ] || continue
-
-            FILE_CONTENT=$(cat "$FILE")
-
-            # Two shapes:
-            #   OWNER/REPO@SHA # vX.Y.Z                       (most third-party actions)
-            #   OWNER/REPO/PATH/INTO/REPO@SHA # vX.Y.Z         (composite actions or reusable
-            #                                                  workflows inside a shared repo)
-            # The second-segment match excludes / and @ to keep the repo name exactly one path
-            # segment; SUBPATH then greedily captures the rest up to the @.
-            while IFS= read -r LINE; do
-              if [[ "$LINE" =~ uses:[[:space:]]+([^/]+)/([^/@]+)(/[^@]*)?@([a-f0-9]+)[[:space:]]+#[[:space:]]*(.*) ]]; then
-                OWNER="${BASH_REMATCH[1]}"
-                REPO="${BASH_REMATCH[2]}"
-                SUBPATH="${BASH_REMATCH[3]}"
-                CURRENT_SHA="${BASH_REMATCH[4]}"
-                CURRENT_TAG=$(echo "${BASH_REMATCH[5]}" | xargs)
-
-                update_action "$FILE" "$OWNER" "$REPO" "$SUBPATH" "$CURRENT_SHA" "$CURRENT_TAG"
-              fi
-            done <<< "$FILE_CONTENT"
-          done
 
           if [ -z "$CHANGES" ]; then
             CHANGES="No action updates available."
@@ -201,9 +220,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCANNED_PINS: ${{ steps.scan.outputs.pins }}
 
       - name: Commit and create PR
-        uses: arcuru/actions/.github/actions/commit-and-pr@96f1d10b48db5907d8aa1fb517787b1d6e8ca4dd # v0.1.0
+        uses: arcuru/actions/.github/actions/commit-and-pr@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
           branch: deps/actions-update
           files: ${{ steps.update.outputs.files }}
