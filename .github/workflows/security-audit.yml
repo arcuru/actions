@@ -51,6 +51,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Read-only job: never leave the token in the checkout's git config.
+          persist-credentials: false
 
       - name: Setup Nix
         uses: arcuru/actions/.github/actions/setup-nix@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
