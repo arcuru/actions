@@ -1,0 +1,16 @@
+# Self-dogfood: audit this repo's own pinned actions daily.
+name: "Self: pin-audit"
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  call:
+    uses: ./.github/workflows/pin-audit.yml
+    secrets: inherit
