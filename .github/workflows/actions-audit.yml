@@ -1,6 +1,8 @@
-# Daily audit of SHA-pinned GitHub Actions against upstream tags and the
-# GitHub Advisory Database. Creates/updates a GitHub issue with the "security"
-# label on findings, and auto-closes it when they clear.
+# Daily security audit of a repository's GitHub Actions usage. Two halves:
+# integrity of SHA-pinned actions (each pin re-resolved against upstream tags,
+# plus the GitHub Advisory Database), and the security posture of the workflows
+# themselves via zizmor. Findings from both land in a single GitHub issue with
+# the "security" label, updated in place and auto-closed when they clear.
 #
 # This is the Actions-side counterpart to security-audit.yml, which covers
 # Cargo dependencies via RustSec. Actions are the higher-risk surface, since
@@ -14,7 +16,14 @@
 # Re-resolving each pinned immutable tag daily surfaces that divergence from
 # public API data alone, days before an advisory is published.
 #
-name: "Deps: Pin Audit"
+# zizmor covers the complementary axis: weaknesses in the workflow definitions
+# themselves — credential persistence, template injection, over-broad
+# permissions, unpinned uses. Its online audits need network access, so this
+# workflow is where they run; the sandboxed Nix CI gates in calling repos
+# cannot reach the network. A .github/zizmor.yml in the calling repo is
+# discovered automatically, and callers without one get zizmor's defaults.
+#
+name: "Deps: Actions Audit"
 
 on:
   workflow_call:
@@ -30,25 +39,27 @@ on:
         default: ""
         type: string
       fail-on-warning:
-        description: "Treat unverifiable pins (no version comment) as a failure."
+        description: "Treat unverifiable pins (no version comment) and zizmor warnings as a failure."
         required: false
         default: "false"
         type: string
     # No secrets required — uses the workflow's built-in GITHUB_TOKEN.
 
 concurrency:
-  group: deps-pin-audit
+  group: deps-actions-audit
   cancel-in-progress: true
 
 jobs:
   audit:
-    name: Pin Audit
+    name: Actions Audit
     runs-on: ${{ inputs.runs-on }}
     environment: ${{ inputs.environment }}
     if: github.repository_owner == 'arcuru'
     permissions:
       issues: write
       contents: read
+      # Required by github/codeql-action/upload-sarif for the zizmor results.
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -66,30 +77,165 @@ jobs:
         with:
           pins: ${{ steps.scan.outputs.pins }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Audit workflows with zizmor
+        id: zizmor
+        # zizmor must never abort the job before the SARIF is uploaded below.
+        continue-on-error: true
+        env:
+          # Online audits are the point of running here; they need a token.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZIZMOR_VERSION: "1.28.0"
+          SARIF_FILE: ${{ runner.temp }}/zizmor.sarif
+        run: |
+          set -uo pipefail
+
+          INPUTS=()
+          for CANDIDATE in .github/workflows .github/actions; do
+            if [ -d "$CANDIDATE" ]; then
+              INPUTS+=("$CANDIDATE")
+            fi
+          done
+
+          if [ "${#INPUTS[@]}" -eq 0 ]; then
+            echo "::notice::No .github/workflows or .github/actions directory to audit."
+            {
+              echo "status=skipped"
+              echo "sarif=false"
+              echo "errors=0"
+              echo "warnings=0"
+              echo "total=0"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # With --format=sarif zizmor reports findings inside the SARIF and
+          # exits 0, reserving non-zero for genuine tool failures. The counts
+          # below therefore come from the SARIF, not from the exit code.
+          #
+          # The input is the repo root, not the directories probed above:
+          # zizmor derives each SARIF result URI from the input it was given, so
+          # a directory input yields bare filenames ("actions-update.yml") that
+          # code scanning resolves against the repo root and fails to annotate.
+          # "." yields repo-relative URIs (".github/workflows/actions-update.yml").
+          # Default collection already covers workflows and composite action
+          # manifests, and honours .gitignore.
+          #
+          # EXIT_CODE is seeded and captured inline: the default shell is
+          # "bash -e {0}", where a failing command aborts the script before any
+          # separate "$?" capture could run.
+          EXIT_CODE=0
+          uvx "zizmor@${ZIZMOR_VERSION}" \
+            --format=sarif \
+            --color=never \
+            --no-progress \
+            -- . > "$SARIF_FILE" || EXIT_CODE=$?
+
+          if [ "$EXIT_CODE" -ne 0 ] || ! jq -e '.runs[0].results' "$SARIF_FILE" >/dev/null 2>&1; then
+            echo "::error::zizmor failed with exit code ${EXIT_CODE}; no usable SARIF produced."
+            {
+              echo "status=error"
+              echo "sarif=false"
+              echo "errors=0"
+              echo "warnings=0"
+              echo "total=0"
+              echo "report=zizmor failed to run (exit code ${EXIT_CODE}). See the workflow logs."
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Counted by level rather than by subtraction: SARIF "note" findings
+          # are informational, and belong in neither count that drives
+          # fail-on-warning. TOTAL therefore covers all three levels, and
+          # ERRORS + WARNINGS can be less than TOTAL.
+          TOTAL=$(jq '.runs[0].results | length' "$SARIF_FILE")
+          ERRORS=$(jq '[.runs[0].results[] | select(.level == "error")] | length' "$SARIF_FILE")
+          WARNINGS=$(jq '[.runs[0].results[] | select(.level == "warning")] | length' "$SARIF_FILE")
+
+          REPORT_FILE="${RUNNER_TEMP}/zizmor-report.md"
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "No zizmor findings." > "$REPORT_FILE"
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "| Level | Rule | Location |"
+              echo "| --- | --- | --- |"
+              jq -r '
+                .runs[0].results[:50][]
+                | "| \(.level) | \(.ruleId) | \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) |"
+              ' "$SARIF_FILE"
+              if [ "$TOTAL" -gt 50 ]; then
+                echo ""
+                echo "_Showing the first 50 of ${TOTAL} findings; the rest are in the Security tab._"
+              fi
+            } > "$REPORT_FILE"
+            echo "status=findings" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "sarif=true"
+            echo "errors=${ERRORS}"
+            echo "warnings=${WARNINGS}"
+            echo "total=${TOTAL}"
+            echo "report<<ZIZMOR_REPORT_EOF"
+            cat "$REPORT_FILE"
+            echo "ZIZMOR_REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload zizmor SARIF
+        if: steps.zizmor.outputs.sarif == 'true'
+        # A rejected SARIF or a repo without code scanning must not cost the run
+        # its tracking issue, which is the only channel the pin findings have.
+        # The failure stays visible in this step's own status.
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: ${{ runner.temp }}/zizmor.sarif
+          category: zizmor
+
       - name: Find existing issue
         id: find_issue
+        # Matched client-side on the exact marker the body below writes. Issue
+        # search is tokenized and would also match the other "security"-labelled
+        # tracking issues, whose bodies a stray `gh issue edit` would overwrite;
+        # its indexing also lags a fresh create, which would double-open.
         run: |
-          ISSUE_NUMBER=$(gh issue list --label security --state open --search 'in:title "Action Pin Audit"' --json number --jq '.[0].number // empty')
+          ISSUE_NUMBER=$(gh issue list --label security --state open --limit 100 \
+            --json number,body \
+            --jq '[.[] | select(.body | contains("<!-- audit-id: actions-audit -->"))][0].number // empty')
           echo "number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create or update issue on findings
-        if: steps.verify.outputs.status != 'ok'
+        if: |
+          steps.verify.outputs.status != 'ok' ||
+          steps.zizmor.outputs.status == 'findings' ||
+          steps.zizmor.outputs.status == 'error'
         run: |
-          TITLE="Action Pin Audit"
+          TITLE="GitHub Actions Audit"
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           BODY=$(cat <<ISSUE_EOF
-          ## Pinned Action Findings
+          <!-- audit-id: actions-audit -->
 
-          The daily pin audit found issues with this repository's SHA-pinned actions.
+          ## GitHub Actions Audit
 
-          ${REPORT}
+          The daily Actions audit found issues in this repository.
+
+          ### Pinned action integrity
+
+          ${PIN_REPORT:-No pin findings.}
 
           **A re-pointed immutable tag is the signature of a force-push supply-chain
           attack.** The pinned SHA refers to the original commit, so CI does not run
           the replacement — but do not bump these actions until the change is
           explained upstream.
+
+          ### Workflow security (zizmor)
+
+          ${ZIZMOR_REPORT:-zizmor did not run.}
 
           _Last checked: ${TIMESTAMP}_
           ISSUE_EOF
@@ -102,24 +248,38 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPORT: ${{ steps.verify.outputs.report }}
+          PIN_REPORT: ${{ steps.verify.outputs.report }}
+          ZIZMOR_REPORT: ${{ steps.zizmor.outputs.report }}
           ISSUE_NUMBER: ${{ steps.find_issue.outputs.number }}
 
       - name: Close issue when clear
-        if: steps.verify.outputs.status == 'ok' && steps.find_issue.outputs.number != ''
+        if: |
+          steps.verify.outputs.status == 'ok' &&
+          (steps.zizmor.outputs.status == 'ok' || steps.zizmor.outputs.status == 'skipped') &&
+          steps.find_issue.outputs.number != ''
         run: |
-          gh issue close "$ISSUE_NUMBER" --comment "All pin findings resolved. Closing automatically."
+          gh issue close "$ISSUE_NUMBER" --comment "All Actions audit findings resolved. Closing automatically."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ steps.find_issue.outputs.number }}
 
       - name: Fail the run on findings
+        # Pin semantics are unchanged. zizmor's SARIF "error" level counts like
+        # a critical pin finding; its warnings follow fail-on-warning. Its
+        # "note" level is informational: reported in the issue table and the
+        # SARIF upload, but never a reason to fail.
         if: |
           steps.verify.outputs.status == 'critical' ||
-          (steps.verify.outputs.status == 'warning' && inputs.fail-on-warning == 'true')
+          steps.zizmor.outputs.status == 'error' ||
+          (steps.zizmor.outputs.errors != '' && steps.zizmor.outputs.errors != '0') ||
+          ((steps.verify.outputs.status == 'warning' ||
+            (steps.zizmor.outputs.warnings != '' && steps.zizmor.outputs.warnings != '0')) &&
+           inputs.fail-on-warning == 'true')
         env:
           CRITICAL: ${{ steps.verify.outputs.critical }}
           WARNING: ${{ steps.verify.outputs.warning }}
+          ZIZMOR_ERRORS: ${{ steps.zizmor.outputs.errors }}
+          ZIZMOR_WARNINGS: ${{ steps.zizmor.outputs.warnings }}
         run: |
-          echo "::error::Pin audit found ${CRITICAL} critical and ${WARNING} warning finding(s). See the tracking issue."
+          echo "::error::Actions audit found ${CRITICAL} critical and ${WARNING} warning pin finding(s), plus ${ZIZMOR_ERRORS} error and ${ZIZMOR_WARNINGS} warning zizmor finding(s). See the tracking issue."
           exit 1

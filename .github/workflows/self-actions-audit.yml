@@ -1,5 +1,5 @@
-# Self-dogfood: audit this repo's own pinned actions daily.
-name: "Self: pin-audit"
+# Self-dogfood: audit this repo's own pinned actions and workflows daily.
+name: "Self: actions-audit"
 
 on:
   schedule:
@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
   issues: write
+  # The called workflow's token is the intersection with these, and the zizmor
+  # SARIF upload needs security-events: write.
+  security-events: write
 
 jobs:
   call:
