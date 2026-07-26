@@ -12,5 +12,5 @@ permissions:
 
 jobs:
   call:
-    uses: ./.github/workflows/pin-audit.yml
+    uses: ./.github/workflows/actions-audit.yml
     secrets: inherit
