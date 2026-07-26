@@ -51,7 +51,7 @@ All six follow the same calling convention: each consumer repo ships a thin wrap
 | [`security-audit`](.github/workflows/security-audit.yml) | `schedule` (daily) | — | `cargo deny check advisories`; opens a tracking issue on hit, closes it on resolution |
 | [`dependency-hold`](.github/workflows/dependency-hold.yml) | `pull_request` | — | Fails any PR on a `deps/*` branch that still has the `on-hold` label |
 | [`update-hold`](.github/workflows/update-hold.yml) | `schedule` (daily) | — | Removes `on-hold` once the PR's `hold-until: YYYY-MM-DD` marker has passed **and** the PR's pinned actions verify |
-| [`pin-audit`](.github/workflows/pin-audit.yml) | `schedule` (daily) | — | Re-resolves every pinned action against upstream tags and the advisory database; opens a tracking issue on hit, closes it on resolution |
+| [`actions-audit`](.github/workflows/actions-audit.yml) | `schedule` (daily) | — | Re-resolves every pinned action against upstream tags and the advisory database, and audits the workflows themselves with `zizmor`; opens a tracking issue on hit, closes it on resolution, and uploads the `zizmor` findings as SARIF to code scanning |
 | [`codeberg-mirror`](.github/workflows/codeberg-mirror.yml) | `push` | `ssh-private-key` | Mirror the caller repo to a Codeberg/Forgejo destination over SSH with ed25519 host-key pinning |
 
 ### Common inputs
@@ -141,6 +141,31 @@ jobs:
     secrets: inherit
 ```
 
+**`actions-audit.yml`** (schedule-triggered, no secrets, but needs the code-scanning grant):
+
+```yaml
+name: "Deps: Actions Audit"
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  security-events: write
+
+jobs:
+  audit:
+    uses: arcuru/actions/.github/workflows/actions-audit.yml@<sha>  # vX.Y.Z
+    secrets: inherit
+```
+
+`security-events: write` is what lets the job upload the `zizmor` SARIF to code scanning. A reusable workflow's job permissions are capped by the caller's grant, so a caller that omits it does not merely skip the upload — GitHub refuses to start the run and the job ends as `startup_failure`.
+
+On a **private** repo the SARIF upload additionally needs `actions: read`; add it to the caller's `permissions:` block there. Public callers do not.
+
 **`dependency-hold.yml`** (PR-triggered):
 
 ```yaml
@@ -190,6 +215,7 @@ jobs:
 - `flake-update` needs `flake.nix` + `flake.lock`.
 - `security-audit` needs `.config/deny.toml`.
 - `cargo-update` / `flake-update` / `actions-update` need a fine-grained `PAT_TOKEN` with `contents:write` + `pull-requests:write` on the calling repo. Store it as either a repo secret or as an environment secret scoped to the env passed via the `environment:` input — both work with `secrets: inherit`. (The default `GITHUB_TOKEN` can't trigger downstream workflow runs, which would silently break the deps-hold check.)
+- `actions-audit` needs `security-events: write` in the caller's `permissions:` block, on top of `contents: read` + `issues: write`, plus `actions: read` if the calling repo is private. Code scanning must be available on the repo for the SARIF upload to land.
 - The `on-hold` and `dependencies` labels need to exist in the repo (the deps PRs use them).
 - `Allow GitHub Actions to create and approve pull requests` must be enabled in Settings → Actions → General.
 
@@ -199,7 +225,8 @@ jobs:
 - **`PAT_TOKEN` is scoped per consumer**, not shared. Each repo that wants the PR-creating deps automation needs its own fine-grained PAT covering only that repo, with the minimum scopes (`contents:write` + `pull-requests:write`).
 - **All `uses:` lines pin a full commit SHA**, with the version comment used by `actions-update` for bumps. Mutable tags like `@v1` are forbidden.
 - **No `${{ }}` interpolation inside `run:` blocks**: untrusted values reach the shell via `env:` only. This is enforced inside this repo and is the rule callers should follow too.
-- **Pins are verified, not just recorded.** `pin-audit` re-resolves every pinned immutable tag daily, and `update-hold` re-verifies a PR before releasing its hold. See [Pin verification](#pin-verification).
+- **Pins are verified, not just recorded.** `actions-audit` re-resolves every pinned immutable tag daily, and `update-hold` re-verifies a PR before releasing its hold. See [Pin verification](#pin-verification).
+- **Workflow definitions are audited too.** The same daily `actions-audit` run puts `zizmor` over every workflow and composite action, covering the posture problems a pin check says nothing about. See [Workflow auditing](#workflow-auditing-zizmor).
 - **Fork-fenced**: every workflow's privileged job has `if: github.repository_owner == 'arcuru'`. Forks running re-enabled copies of the workflow no-op cleanly.
 
 ## Pin verification
@@ -258,7 +285,7 @@ the repository-wide query is available, and its results are warnings rather than
 criticals, because they may describe a release the reference is not on.
 
 These checks are consumed in two places, differing in what they look at rather
-than in what they detect. `pin-audit` runs them daily over every pin on the
+than in what they detect. `actions-audit` runs them daily over every pin on the
 default branch, so a pin stays covered for as long as it is in the tree — which
 is what catches a tag re-pointed, or an advisory published, long after the PR
 that introduced the pin was merged. `update-hold` runs them against a PR's head
@@ -283,6 +310,35 @@ An upstream lookup that cannot be completed is reported as a warning, never as a
 pass and never as a compromise, so a rate limit neither certifies a reference nor
 raises a false alarm across every pin at once.
 
+## Workflow auditing (zizmor)
+
+Pin verification asks whether a reference still points where it claimed to. It
+says nothing about what the workflow around that reference does. The same daily
+`actions-audit` run therefore also puts [`zizmor`](https://github.com/zizmorcore/zizmor)
+over every workflow and composite action in the tree, covering workflow security
+posture: `${{ }}` interpolation reaching a `run:` block (template injection),
+dangerous triggers such as `pull_request_target`, credentials left behind in a
+checkout's git config, over-broad `permissions:`, unpinned `uses:` references,
+and similar definition-level problems.
+
+`zizmor` runs with its online audits enabled, which query the GitHub API rather
+than reading the file alone — flagging references to actions with published
+advisories and commits that are not reachable from the repository they appear
+to come from.
+
+Findings are uploaded as SARIF, so they land in the repo's code scanning alerts
+with per-line annotations and their own dismissal state, instead of being flattened
+into the tracking issue. That upload is the reason callers must grant
+`security-events: write`.
+
+**It does not replace tag re-resolution.** No `zizmor` audit reads the trailing
+`# vX.Y.Z` comment on a pin and re-resolves it upstream, so a release tag
+force-pushed to a malicious commit — the shape every recent Actions compromise
+actually took — is invisible to it. Detecting that remains the job of the
+`scan-pins` / `verify-pins` pass described above, and stays the more important
+half of this workflow. The two are complementary: one checks that references
+still mean what they said, the other checks what the workflows do with them.
+
 ## Releases
 
 Releases are tagged from `main` as `vX.Y.Z`. Consumers should pin a full SHA *with* a matching version comment so the `actions-update` workflow can bump them.
@@ -293,7 +349,7 @@ Breaking changes (input renames, removed secrets, schema changes) bump the major
 
 - Pin verification only covers refs pinned to a SHA *with* a version comment. A pin with no comment cannot be compared against anything and is reported as a warning rather than checked.
 - Pin verification cannot detect a backdoor introduced by a legitimate maintainer in a normal release — no tag moves and no advisory exists. It detects tag tampering and published advisories, which is what the recent Actions compromises actually looked like.
-- `pin-audit` and `update-hold` reference the `scan-pins` / `verify-pins` actions by SHA. When cutting a release that changes those actions, re-pin those references to the release commit.
+- `actions-audit` and `update-hold` reference the `scan-pins` / `verify-pins` actions by SHA. When cutting a release that changes those actions, re-pin those references to the release commit.
 - The `cargo-update` workflow assumes a single-package crate at the repo root (`Cargo.lock` only). Workspaces with multiple lockfiles need an extension.
 - `flake-update`'s per-input compare URL only works when the input source is a `github:` flake ref. Other types (`git+ssh://`, `path:`, `tarball:`) fall back to bare-SHA display.
 
