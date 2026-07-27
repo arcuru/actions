@@ -1,0 +1,43 @@
+# zizmor configuration — https://docs.zizmor.sh/configuration/
+#
+# Each suppression below is a deliberate, reviewed exception. At zizmor's
+# default persona, everything else is expected to pass; new findings should be
+# fixed, not added here.
+rules:
+  ref-version-mismatch:
+    ignore:
+      # A reusable workflow cannot reach its own repository's composite actions
+      # by relative path — its steps execute against the caller's workspace — so
+      # these references name this repository absolutely and pin a SHA on main.
+      #
+      # The trailing `# main` names the branch the reference tracks, not a
+      # release it claims to be part of. zizmor resolves that comment as a ref
+      # and reports the pinned SHA as diverged, which is true but not the defect
+      # the audit is looking for: the divergence is the point, since the pin
+      # stays frozen while the branch advances.
+      #
+      # Tying these to release tags instead creates a bootstrap on every action
+      # change — the tag cannot exist until the commit does, and the commit
+      # cannot be written until the tag is known — and drifts into genuinely
+      # false version comments, which the pin audit then reports as a
+      # re-pointed tag. See c13c63e.
+      #
+      # The divergence is also permanent rather than transient: actions-update
+      # deliberately leaves these pins alone, since bumping a reference that
+      # tracks this repository's own branch manufactures the drift the next run
+      # would find. Whether one points at stale content is a separate question,
+      # and the audit answers it directly by comparing the action's content at
+      # the pin against the current tree.
+      #
+      # Whole-file entries also cover the third-party pins in these workflows,
+      # so a stale version comment on one of those stops reporting here. That
+      # is covered instead by verify-pins, which resolves every pin against
+      # upstream daily and reports a comment naming a tag the SHA does not
+      # match as a re-pointed tag. Line-pinned entries would be narrower, but
+      # fifteen of them across six files drift on any edit above.
+      - actions-audit.yml
+      - actions-update.yml
+      - cargo-update.yml
+      - flake-update.yml
+      - security-audit.yml
+      - update-hold.yml
