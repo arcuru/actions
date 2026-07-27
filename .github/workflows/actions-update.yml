@@ -3,7 +3,9 @@
 # GitHub API for latest releases,
 # and updates the SHA and version comment in-place. Handles two ref
 # shapes (OWNER/REPO@SHA and OWNER/REPO/PATH@SHA) and the
-# branch-tracking pins (a branch name in place of a version). Creates a PR on the
+# branch-tracking pins (a branch name in place of a version). References into
+# the repository being updated are left alone and logged; the Actions audit
+# reports those on content drift instead. Creates a PR on the
 # deps/actions-update branch with a configurable hold period before
 # merge. CI handles verification via normal PR checks.
 #
@@ -191,7 +193,21 @@ jobs:
             fi
           }
 
+          # References naming the repository being updated are internal
+          # coupling, not dependencies: a reusable workflow's relative `./`
+          # paths resolve against the caller's workspace, so a repository that
+          # ships actions must name its own by absolute reference. Their
+          # comment tracks that same repository's branch, which merging this
+          # job's PR advances — so bumping them manufactures exactly the drift
+          # the next run would find. Whether they point at stale content is a
+          # different question, answered by the Actions audit.
+          SELF_SKIPPED=()
+
           while IFS=$'\x1f' read -r FILE OWNER REPO SUBPATH CURRENT_SHA CURRENT_TAG CLASS REF_KIND; do
+            if [ "${OWNER,,}/${REPO,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+              SELF_SKIPPED+=("${OWNER}/${REPO}${SUBPATH}")
+              continue
+            fi
             # Pins with no version comment cannot be rewritten in place, since
             # the substitution keys on the trailing "# TAG". They are reported
             # by the pin audit instead.
@@ -203,6 +219,16 @@ jobs:
             printf '%s' "$SCANNED_PINS" | jq -r '
               .[] | [.file, .owner, .repo, .subpath, .ref, .tag, .class, .ref_kind] | join("\u001f")'
           )
+
+          # Coverage this job declines to provide is stated, not dropped: a
+          # reference silently missing from the update set is indistinguishable
+          # from one that was already up to date.
+          if [ "${#SELF_SKIPPED[@]}" -gt 0 ]; then
+            SELF_LIST=$(printf '%s\n' "${SELF_SKIPPED[@]}" | sort -u)
+            SELF_COUNT=$(printf '%s\n' "$SELF_LIST" | wc -l)
+            echo "::notice::skipped ${SELF_COUNT} self-reference(s) into ${GITHUB_REPOSITORY}; these track this repository and are checked for content drift by the Actions audit instead."
+            printf '%s\n' "$SELF_LIST" | sed 's/^/  skipped self-reference: /'
+          fi
 
           if [ -z "$CHANGES" ]; then
             CHANGES="No action updates available."
