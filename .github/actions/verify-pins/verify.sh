@@ -39,6 +39,18 @@
 # SHA genuinely is what the tag resolves to) while naming a path not present
 # there, which otherwise fails only at run time.
 #
+# Check D - self-reference content drift. A reference naming the repository
+# being audited is internal coupling, not a dependency: a reusable workflow's
+# relative `./` paths resolve against the caller's workspace, so this repo's
+# own actions must be named absolutely. For those, "the pinned SHA is old" is
+# not a finding — every commit to this repository makes it older. The
+# answerable question is whether the referenced action's content differs
+# between the pinned commit and the audited tree, i.e. whether a workflow is
+# running a stale copy of an action that lives beside it. Reported as a warning
+# because it describes internal lag, not an upstream compromise. Repositories
+# that merely consume these actions have no self-references, so the check finds
+# nothing there.
+#
 # Failure handling is deliberate: a lookup that could not be completed is a
 # warning, never a clean pass and never a compromise. A rate limit must not
 # read as "verified", nor cry "force-push attack" across every pin at once.
@@ -50,6 +62,12 @@ set -uo pipefail
 INPUT="${1:--}"
 PINS=$(cat "$INPUT")
 REPORT_FILE="${RUNNER_TEMP:-/tmp}/verify-pins-report.md"
+
+# The repository this run is auditing, and the commit its working tree is at.
+# A reference naming this repository is a self-reference (see Check D). Both
+# are empty outside Actions, which disables Check D rather than guessing.
+SELF_REPO="${GITHUB_REPOSITORY:-}"
+SELF_HEAD="${GITHUB_SHA:-}"
 
 CRITICAL=0
 WARNING=0
@@ -137,6 +155,38 @@ check_path() {
   return "$last"
 }
 
+# The repo-relative path whose content defines a reference. A reference with no
+# subpath names the action manifest at the repository root.
+ref_content_path() {
+  local subpath="${1#/}"
+  if [ -n "$subpath" ]; then
+    printf '%s' "$subpath"
+  else
+    printf 'action.yml'
+  fi
+}
+
+# Fingerprint the content a reference resolves to at a commit.
+#
+# Read over the API rather than from git: the audit checks out with
+# `fetch-depth: 1` and `persist-credentials: false`, so the pinned commit's
+# tree is not present locally and git has no credentials to fetch it, while the
+# API needs only the token this script already uses. Directory entries carry
+# their tree SHA, which is derived from everything beneath them, so a listing of
+# names and SHAs registers a change to any file the action ships — not just its
+# manifest. Same exit convention as gh_get.
+content_fingerprint() {
+  local repo="$1" path="$2" ref="$3" body rc query=""
+  if [ -n "$ref" ]; then
+    query="?ref=${ref}"
+  fi
+  body=$(gh_get "repos/${repo}/contents/${path}${query}"); rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$body" | jq -Sc '
+    if type == "array" then [ .[] | {name, sha, type} ] | sort_by(.name)
+    else [ {name, sha, type} ] end' || return 2
+}
+
 # Two SHAs match if one is a prefix of the other, since a pin may be abbreviated.
 sha_matches() {
   # Git accepts either case in a written ref; the API always answers lowercase.
@@ -169,6 +219,25 @@ while IFS=$'\x1f' read -r repo subpath ref tag class ref_kind files; do
       emit warning "- \`${display}@${short}\` could not be checked for existence upstream (in ${files})"
     else
       emit critical "- **\`${display}\` does not exist at the pinned commit \`${short}\`.** Expected \`${missing}\` in \`${repo}\`. The reference resolves to a real commit but the action is not in it, so every run using this pin fails (in ${files})"
+    fi
+  fi
+
+  # --- Check D ------------------------------------------------------------
+  # A pinned commit that is absent is Check C's finding, not this one, so rc 1
+  # on the pinned side is left alone rather than reported twice.
+  if [ -n "$SELF_REPO" ] && [ "${repo,,}" = "${SELF_REPO,,}" ]; then
+    self_path=$(ref_content_path "$subpath")
+    pinned_fp=$(content_fingerprint "$repo" "$self_path" "$ref"); pin_rc=$?
+    head_fp=$(content_fingerprint "$repo" "$self_path" "$SELF_HEAD"); head_rc=$?
+
+    if [ "$pin_rc" -eq 2 ] || [ "$head_rc" -eq 2 ]; then
+      emit warning "- \`${display}@${short}\` is a self-reference whose content could not be compared against the current tree (in ${files})"
+    elif [ "$pin_rc" -eq 1 ]; then
+      : # absent at the pinned commit — Check C's finding, reported there
+    elif [ "$head_rc" -eq 1 ]; then
+      emit warning "- \`${display}@${short}\` is a self-reference to \`${self_path}\`, which no longer exists in this repository — the pin is the only copy left (in ${files})"
+    elif [ "$pinned_fp" != "$head_fp" ]; then
+      emit warning "- \`${display}@${short}\` is a self-reference running an older copy of \`${self_path}\` — its content differs from the current tree, so this workflow does not run what is checked in beside it (in ${files})"
     fi
   fi
 
