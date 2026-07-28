@@ -63,11 +63,12 @@ INPUT="${1:--}"
 PINS=$(cat "$INPUT")
 REPORT_FILE="${RUNNER_TEMP:-/tmp}/verify-pins-report.md"
 
-# The repository this run is auditing, and the commit its working tree is at.
-# A reference naming this repository is a self-reference (see Check D). Both
-# are empty outside Actions, which disables Check D rather than guessing.
+# The repository this run is auditing, and the tree self-references are compared
+# against. A reference naming this repository is a self-reference (see Check D).
+# HEAD_REF names that tree when it is not the commit this run is at. Both are
+# empty outside Actions, which disables Check D rather than guessing.
 SELF_REPO="${GITHUB_REPOSITORY:-}"
-SELF_HEAD="${GITHUB_SHA:-}"
+SELF_HEAD="${HEAD_REF:-${GITHUB_SHA:-}}"
 
 CRITICAL=0
 WARNING=0
@@ -155,18 +156,8 @@ check_path() {
   return "$last"
 }
 
-# The repo-relative path whose content defines a reference. A reference with no
-# subpath names the action manifest at the repository root.
-ref_content_path() {
-  local subpath="${1#/}"
-  if [ -n "$subpath" ]; then
-    printf '%s' "$subpath"
-  else
-    printf 'action.yml'
-  fi
-}
-
-# Fingerprint the content a reference resolves to at a commit.
+# Fingerprint the content a reference resolves to at a commit. An empty path is
+# the repository root, which is what a reference with no subpath names.
 #
 # Read over the API rather than from git: the audit checks out with
 # `fetch-depth: 1` and `persist-credentials: false`, so the pinned commit's
@@ -223,21 +214,24 @@ while IFS=$'\x1f' read -r repo subpath ref tag class ref_kind files; do
   fi
 
   # --- Check D ------------------------------------------------------------
-  # A pinned commit that is absent is Check C's finding, not this one, so rc 1
-  # on the pinned side is left alone rather than reported twice.
   if [ -n "$SELF_REPO" ] && [ "${repo,,}" = "${SELF_REPO,,}" ]; then
-    self_path=$(ref_content_path "$subpath")
+    self_path="${subpath#/}"
+    self_display="${self_path:-.}"
     pinned_fp=$(content_fingerprint "$repo" "$self_path" "$ref"); pin_rc=$?
     head_fp=$(content_fingerprint "$repo" "$self_path" "$SELF_HEAD"); head_rc=$?
 
-    if [ "$pin_rc" -eq 2 ] || [ "$head_rc" -eq 2 ]; then
+    # Absence at the pinned commit is Check C's finding only where Check C made
+    # it. Where Check C passed, the same absence means the comparison did not
+    # happen, and an unmade comparison is a warning rather than a silent pass.
+    if [ "$pin_rc" -eq 2 ] || [ "$head_rc" -eq 2 ] ||
+      { [ "$pin_rc" -eq 1 ] && [ "$path_rc" -eq 0 ]; }; then
       emit warning "- \`${display}@${short}\` is a self-reference whose content could not be compared against the current tree (in ${files})"
     elif [ "$pin_rc" -eq 1 ]; then
       : # absent at the pinned commit — Check C's finding, reported there
     elif [ "$head_rc" -eq 1 ]; then
-      emit warning "- \`${display}@${short}\` is a self-reference to \`${self_path}\`, which no longer exists in this repository — the pin is the only copy left (in ${files})"
+      emit warning "- \`${display}@${short}\` is a self-reference to \`${self_display}\`, which no longer exists in this repository — the pin is the only copy left (in ${files})"
     elif [ "$pinned_fp" != "$head_fp" ]; then
-      emit warning "- \`${display}@${short}\` is a self-reference running an older copy of \`${self_path}\` — its content differs from the current tree, so this workflow does not run what is checked in beside it (in ${files})"
+      emit warning "- \`${display}@${short}\` is a self-reference running an older copy of \`${self_display}\` — its content differs from the current tree, so this workflow does not run what is checked in beside it (in ${files})"
     fi
   fi
 
