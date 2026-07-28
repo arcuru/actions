@@ -137,6 +137,7 @@ jobs:
         uses: arcuru/actions/.github/actions/verify-pins@fd93c1398401116e0b0a0b630ef6f002e2dad9ca # main
         with:
           pins: ${{ steps.scan.outputs.pins }}
+          head-ref: ${{ matrix.pr.head_sha }}
 
       # Keep the hold on and block the PR. The pinned SHAs point at the original
       # commits, so the PR does not introduce the replacement — but the upstream

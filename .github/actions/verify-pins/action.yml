@@ -14,6 +14,10 @@ inputs:
     description: "Token used for API lookups."
     required: false
     default: ${{ github.token }}
+  head-ref:
+    description: "Ref holding the tree to compare self-references against."
+    required: false
+    default: ${{ github.sha }}
 
 outputs:
   status:
@@ -44,6 +48,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         PINS_JSON: ${{ inputs.pins }}
+        HEAD_REF: ${{ inputs.head-ref }}
       run: |
         set -uo pipefail
         printf '%s' "$PINS_JSON" > "${RUNNER_TEMP}/pins.json"
