@@ -76,11 +76,11 @@ jobs:
 
       - name: Scan pins
         id: scan
-        uses: arcuru/actions/.github/actions/scan-pins@6568fce9d9e09782fcec9d9653411b35075c7902 # main
+        uses: $/.github/actions/scan-pins
 
       - name: Verify pins
         id: verify
-        uses: arcuru/actions/.github/actions/verify-pins@fd93c1398401116e0b0a0b630ef6f002e2dad9ca # main
+        uses: $/.github/actions/verify-pins
         with:
           pins: ${{ steps.scan.outputs.pins }}
 

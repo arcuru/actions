@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Nix
-        uses: arcuru/actions/.github/actions/setup-nix@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
+        uses: $/.github/actions/setup-nix
         with:
           enable-magic-cache: ${{ inputs.enable-magic-cache }}
           extra-substituters: ${{ inputs.extra-substituters }}

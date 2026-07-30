@@ -69,7 +69,7 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Setup Nix
-        uses: arcuru/actions/.github/actions/setup-nix@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
+        uses: $/.github/actions/setup-nix
         with:
           enable-magic-cache: ${{ inputs.enable-magic-cache }}
           extra-substituters: ${{ inputs.extra-substituters }}
@@ -77,7 +77,7 @@ jobs:
 
       - name: Setup deps branch
         id: branch
-        uses: arcuru/actions/.github/actions/setup-deps-branch@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
+        uses: $/.github/actions/setup-deps-branch
         with:
           prefix: deps/actions-update
 
@@ -87,7 +87,7 @@ jobs:
       # rewrites.
       - name: Scan pins
         id: scan
-        uses: arcuru/actions/.github/actions/scan-pins@6568fce9d9e09782fcec9d9653411b35075c7902 # main
+        uses: $/.github/actions/scan-pins
 
       - name: Update action versions
         id: update
@@ -195,16 +195,26 @@ jobs:
           }
 
           # References naming the repository being updated are internal
-          # coupling, not dependencies: a reusable workflow's relative `./`
-          # paths resolve against the caller's workspace, so a repository that
-          # ships actions must name its own by absolute reference. Their
-          # comment tracks that same repository's branch, which merging this
-          # job's PR advances — so bumping them manufactures exactly the drift
-          # the next run would find. Whether they point at stale content is a
-          # different question, answered by the Actions audit.
+          # coupling, not dependencies: a repository that ships actions and
+          # calls them from its own reusable workflows cannot reach them by
+          # relative `./` path, since those resolve against the caller's
+          # workspace. Where such a reference is absolute, its comment tracks
+          # that same repository's branch, which merging this job's PR advances
+          # — so bumping it manufactures exactly the drift the next run would
+          # find. Whether it points at stale content is a different question,
+          # answered by the Actions audit.
+          #
+          # Self-repository (`$/`) references are the same coupling expressed so
+          # that the question cannot arise: they resolve to the commit being
+          # run, so there is nothing to bump and nothing to drift.
           SELF_SKIPPED=()
+          SELF_SYNTAX=0
 
           while IFS=$'\x1f' read -r FILE OWNER REPO SUBPATH CURRENT_SHA CURRENT_TAG CLASS REF_KIND; do
+            if [ "$REF_KIND" = "self" ]; then
+              SELF_SYNTAX=$((SELF_SYNTAX + 1))
+              continue
+            fi
             if [ "${OWNER,,}/${REPO,,}" = "${GITHUB_REPOSITORY,,}" ]; then
               SELF_SKIPPED+=("${OWNER}/${REPO}${SUBPATH}")
               continue
@@ -231,6 +241,10 @@ jobs:
             printf '%s\n' "$SELF_LIST" | sed 's/^/  skipped self-reference: /'
           fi
 
+          if [ "$SELF_SYNTAX" -gt 0 ]; then
+            echo "::notice::skipped ${SELF_SYNTAX} self-repository (\`\$/\`) reference(s); these resolve to the running commit and carry no version to update."
+          fi
+
           if [ -z "$CHANGES" ]; then
             CHANGES="No action updates available."
           fi
@@ -250,7 +264,7 @@ jobs:
           SCANNED_PINS: ${{ steps.scan.outputs.pins }}
 
       - name: Commit and create PR
-        uses: arcuru/actions/.github/actions/commit-and-pr@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
+        uses: $/.github/actions/commit-and-pr
         with:
           branch: ${{ steps.branch.outputs.branch }}
           files: ${{ steps.update.outputs.files }}

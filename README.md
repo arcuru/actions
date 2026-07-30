@@ -317,10 +317,32 @@ that the name is a real branch and not a tag (the compare endpoint resolves
 tags too, so a tag name would otherwise pass as though it were a branch), and
 that the commit is reachable from it. A commit that never landed on the branch,
 because it was squashed away or force-pushed over, resolves and vanishes when
-that line is garbage collected. This repo's own references track `main` this way:
-they are an implementation detail of the reusable workflows, not part of the
-released interface, so coupling them to release tags only creates a bootstrap
-problem every time a new action is added.
+that line is garbage collected.
+
+**Self-repository references.** This repo's own workflows reach its composite
+actions with [self-repository syntax][self-syntax]: `uses: $/.github/actions/scan-pins`,
+with no owner, no ref and no version comment. It resolves to the repository of
+the workflow being run, at the exact commit being run.
+
+That is not a convenience. A relative `./` path cannot be used here, because a
+reusable workflow's steps execute against the *caller's* workspace, so these
+references previously had to name this repository absolutely and pin a SHA on
+`main`. Doing so made the version a consumer pinned and the action version it
+actually ran two independent facts, kept aligned by hand: a caller on `v0.2.1`
+ran whichever `setup-nix` commit was hardcoded inside `v0.2.1`, which was only
+ever the right one by maintenance. `$/` makes them the same fact. It also
+retires the bookkeeping that grew around the old arrangement — the updater
+skipping these references (bumping one manufactured the drift the next run
+found), the audit comparing action content against the tree, and a
+`ref-version-mismatch` suppression covering six whole files.
+
+These references are still scanned and counted, with a `ref_kind` of `self`.
+They are exempt from every upstream check, since there is no upstream to
+resolve, but they are never silently dropped: a reference missing from the scan
+is indistinguishable from a repository that has none, which is how a change
+swapping `$/` back for a mutable `@main` would otherwise pass verification.
+
+[self-syntax]: https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/
 
 **Reference resolvability.** Confirm the action or reusable workflow actually
 exists at the pinned commit. A pin can be internally consistent — the SHA really
@@ -374,6 +396,17 @@ and similar definition-level problems.
 than reading the file alone — flagging references to actions with published
 advisories and commits that are not reachable from the repository they appear
 to come from.
+
+> **Blocked: `zizmor` cannot parse self-repository syntax.** Through v1.28.0 it
+> rejects a `$/` `uses:` value as malformed and aborts with *"no audit was
+> performed"*. The failure is repo-wide rather than per-file, and happens while
+> building the model — before any `ignore:` entry or `# zizmor: ignore` comment
+> could apply — so a single `$/` reference anywhere in the tree takes the whole
+> zizmor half of the daily audit with it. `actionlint` (v1.7.12) rejects the
+> same values, though only for the files it is handed, which `ci.yml` works
+> around by name. Until `zizmor` parses `$/`, adopting it here trades the
+> workflow audit for the pin coherence it buys, which is not a trade this
+> repository should make.
 
 Findings are uploaded as SARIF, so they land in the repo's code scanning alerts
 with per-line annotations and their own dismissal state, instead of being flattened
