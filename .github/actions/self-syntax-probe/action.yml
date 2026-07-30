@@ -1,0 +1,44 @@
+# Outer hop of the self-repository syntax probe.
+#
+# Exercises `$/` from inside a composite action, and reports whatever the
+# runner will tell us about its own version. The behavioural result is the
+# authoritative one: the agent version is a diagnostic for reading a failure,
+# not the thing being tested. A runner that resolves the reference supports the
+# syntax whatever it claims to be.
+name: "Self-Syntax Probe"
+description: "Exercises a nested `$/` reference and reports the runner agent version."
+
+outputs:
+  marker:
+    description: "Marker propagated from the nested action. Empty if the nested reference did not run."
+    value: ${{ steps.nested.outputs.marker }}
+
+runs:
+  using: composite
+  steps:
+    # Best-effort, and deliberately non-fatal: the runner agent version is not
+    # exposed as an environment variable, so this reads the layouts hosted and
+    # ubicloud runners are known to use and shrugs if neither is present.
+    - name: Report runner agent version
+      shell: bash
+      run: |
+        set -uo pipefail
+        echo "Runner OS/arch: ${RUNNER_OS:-?}/${RUNNER_ARCH:-?}"
+        echo "Self-repository syntax requires runner agent 2.336.0 or newer."
+        FOUND=""
+        for CANDIDATE in "${RUNNER_TOOL_CACHE:-}/../.." /home/runner /opt/actions-runner /actions-runner; do
+          [ -n "$CANDIDATE" ] || continue
+          for VERSION_FILE in "$CANDIDATE"/runners/*/.runner "$CANDIDATE"/.runner; do
+            [ -f "$VERSION_FILE" ] || continue
+            echo "Agent metadata at ${VERSION_FILE}:"
+            jq -r 'to_entries[] | "  \(.key)=\(.value)"' "$VERSION_FILE" 2>/dev/null || cat "$VERSION_FILE"
+            FOUND="yes"
+          done
+        done
+        # Hosted runners encode the version in the install path.
+        ls -d /home/runner/runners/* 2>/dev/null && FOUND="yes"
+        [ -n "$FOUND" ] || echo "Could not locate runner agent metadata on this runner; relying on the behavioural result below."
+
+    - name: Nested self-repository reference
+      id: nested
+      uses: $/.github/actions/self-syntax-probe/nested

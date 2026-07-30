@@ -1,0 +1,26 @@
+# Innermost hop of the self-repository syntax probe.
+#
+# Reached only through a `$/` reference made from inside another composite
+# action, which is the shape the conversion in this repository depends on: a
+# reusable workflow's steps run against the caller's workspace, so nested
+# composition has to resolve against the defining repository rather than
+# whatever happens to be checked out.
+#
+# It emits a marker rather than merely succeeding. A step that resolves but
+# silently does nothing is indistinguishable from one that never ran, and the
+# probe's whole job is to tell those apart.
+name: "Self-Syntax Probe (nested)"
+description: "Emits a marker string, proving a nested `$/` reference resolved and executed."
+
+outputs:
+  marker:
+    description: "Literal marker string. Present only if this action actually ran."
+    value: ${{ steps.mark.outputs.marker }}
+
+runs:
+  using: composite
+  steps:
+    - name: Emit marker
+      id: mark
+      shell: bash
+      run: echo "marker=self-syntax-ok" >> "$GITHUB_OUTPUT"
