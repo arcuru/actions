@@ -1,0 +1,72 @@
+# Does the self-repository (`$/`) syntax actually work on the runners we use?
+#
+# `$/<path>` resolves to the repository of the workflow being run, at the exact
+# commit being run, with no checkout. GitHub announced it on 2026-07-30 and
+# requires runner agent 2.336.0 or newer. Hosted runners get that on GitHub's
+# schedule; ubicloud ships its own images and refreshes them monthly following
+# GitHub's releases, so hosted support says nothing about ubicloud support —
+# and every consumer of this repository runs on ubicloud. Both are tested here,
+# on x64 and arm64, because they are separate images.
+#
+# This deliberately does not check out the repository. The absence of a
+# checkout step is part of the test: if `$/` needed one, these jobs would fail.
+#
+# IMPORTANT: this workflow and the action it calls are excluded from actionlint
+# in ci.yml, and must not merge to main while that exclusion is needed. See
+# that exclusion's comment, and the note in README.md, for why.
+name: "Self: self-syntax probe"
+
+on:
+  # Runs on push to the branch that carries it, so the probe can be exercised
+  # without first landing on the default branch — which is the thing it exists
+  # to decide.
+  push:
+    branches: [feat/self-repository-syntax]
+  workflow_dispatch:
+  # Weekly, so a runner image update that adds support shows up on its own
+  # rather than waiting for someone to remember to re-check.
+  schedule:
+    - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-syntax-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: "probe (${{ matrix.runner }})"
+    # ubicloud runners exist only for this owner; a fork would queue forever.
+    if: github.repository_owner == 'arcuru'
+    strategy:
+      # Every runner's result is wanted. Stopping at the first failure would
+      # hide whether the failure is universal or specific to one image, which
+      # is the only interesting distinction here.
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubicloud-standard-2
+          - ubicloud-standard-2-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Self-repository reference from a workflow step
+        id: probe
+        uses: $/.github/actions/self-syntax-probe
+
+      # The step above resolving is necessary but not sufficient: it must also
+      # have run, and have reached the nested reference inside it.
+      - name: Assert the probe executed
+        env:
+          MARKER: ${{ steps.probe.outputs.marker }}
+        run: |
+          set -uo pipefail
+          if [ "$MARKER" != "self-syntax-ok" ]; then
+            echo "::error::Self-repository syntax resolved but produced no marker on ${RUNNER_OS}/${RUNNER_ARCH} (got '${MARKER}')."
+            exit 1
+          fi
+          echo "Self-repository syntax works on this runner, including nested composition."

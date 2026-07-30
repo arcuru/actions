@@ -34,4 +34,43 @@ jobs:
         uses: ./.github/actions/setup-nix
 
       - name: Run actionlint
-        run: nix run nixpkgs#actionlint -- -color .github/workflows/*.yml
+        run: |
+          set -uo pipefail
+
+          # actionlint (1.7.12, current) rejects the self-repository syntax
+          # `$/<path>` as a malformed `uses:` value: it accepts only
+          # `{owner}/{repo}@{ref}` and `./path`. GitHub shipped `$/` on
+          # 2026-07-30; actionlint's last release predates it by four months.
+          #
+          # Excluding the file is the whole available remedy — the rejection
+          # happens while parsing, so `-ignore` (which filters emitted
+          # messages) cannot reach it. Keep the list to files that genuinely
+          # cannot be parsed, and delete it once actionlint understands `$/`.
+          UNPARSEABLE=(
+            .github/workflows/self-syntax-probe.yml
+          )
+
+          FILES=()
+          for FILE in .github/workflows/*.yml; do
+            SKIP=""
+            for EXCLUDED in "${UNPARSEABLE[@]}"; do
+              if [ "$FILE" = "$EXCLUDED" ]; then
+                SKIP="yes"
+                break
+              fi
+            done
+            if [ -z "$SKIP" ]; then
+              FILES+=("$FILE")
+            fi
+          done
+
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::No workflow files left to lint; the exclusion list has swallowed the lot."
+            exit 1
+          fi
+
+          for EXCLUDED in "${UNPARSEABLE[@]}"; do
+            echo "::notice::${EXCLUDED} is not linted: actionlint cannot parse the self-repository syntax it exercises."
+          done
+
+          nix run nixpkgs#actionlint -- -color "${FILES[@]}"
