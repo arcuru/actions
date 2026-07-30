@@ -101,8 +101,18 @@ pins_trim() {
 #   OWNER/REPO@REF # vX.Y.Z              most third-party actions
 #   OWNER/REPO/PATH@REF # vX.Y.Z         composite actions or reusable workflows
 #                                        living inside a shared repo
+#   $/PATH                               self-repository syntax: the running
+#                                        workflow's own repository, at the
+#                                        exact commit being run
 # The second-segment match excludes / and @ to keep the repo name exactly one
 # path segment; SUBPATH then captures the rest up to the @.
+#
+# A `$/` reference carries no ref to check and cannot be re-pointed: it always
+# resolves to the commit already executing. It is still emitted, with
+# `ref_kind` and `class` of `self` and empty owner/repo/ref, because a
+# reference that vanishes from the scan is indistinguishable from a repository
+# that has none — which is how a change swapping `$/` back for a mutable
+# `@main` would otherwise pass verification unnoticed.
 #
 # Lines whose first non-space character is `#` are skipped: commented-out steps
 # do not run, so verifying them produces findings for code that cannot execute.
@@ -117,6 +127,18 @@ pins_parse_content() {
     case "$stripped" in
       '#'*) continue ;;
     esac
+
+    # Checked before the OWNER/REPO shape: `$` is a legal first segment as far
+    # as that pattern is concerned, so `$/path@ref` would otherwise parse as a
+    # repository named `$`.
+    if [[ "$line" =~ ^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[\"\']?\$(/[^@[:space:]\"\']*)[\"\']?[[:space:]]*(#[[:space:]]*(.*))?$ ]]; then
+      jq -n \
+        --arg file "$file" \
+        --arg subpath "${BASH_REMATCH[1]}" \
+        --arg tag "$(pins_trim "${BASH_REMATCH[3]}")" \
+        '{file: $file, owner: "", repo: "", subpath: $subpath, ref: "", tag: $tag, class: "self", ref_kind: "self"}'
+      continue
+    fi
 
     if [[ "$line" =~ ^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[\"\']?([^/[:space:]\"\']+)/([^/@[:space:]\"\']+)(/[^@[:space:]\"\']*)?@([^[:space:]\"\'#]+)[\"\']?[[:space:]]*(#[[:space:]]*(.*))?$ ]]; then
       owner="${BASH_REMATCH[1]}"

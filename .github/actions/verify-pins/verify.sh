@@ -193,6 +193,17 @@ sha_matches() {
 # and silently shift every field after it.
 # ---------------------------------------------------------------------------
 while IFS=$'\x1f' read -r repo subpath ref tag class ref_kind files; do
+  # A self-repository reference resolves to the commit already running, so
+  # there is no upstream to re-resolve, no tag that can be re-pointed and no
+  # content that can drift from the tree it was read out of. Every check below
+  # is answered by construction. It is counted rather than skipped so the
+  # totals still describe the whole file: an unverifiable reference and an
+  # unverified one must not report identically.
+  if [ "$ref_kind" = "self" ]; then
+    CHECKED=$((CHECKED + 1))
+    continue
+  fi
+
   [ -n "$repo" ] || continue
   CHECKED=$((CHECKED + 1))
   short="${ref:0:9}"
