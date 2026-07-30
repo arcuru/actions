@@ -83,13 +83,21 @@ jobs:
       - name: Run flake update
         id: update
         run: |
+          # Capture the exit code explicitly instead of letting `set -e` abort
+          # mid-assignment: the command substitution swallows stderr, so an
+          # aborted step would fail with no diagnostic output at all.
+          set +e
           OUTPUT=$(nix flake update 2>&1)
+          EXIT_CODE=$?
+          set -e
           echo "$OUTPUT"
+          DELIM="UPDATE_EOF_${RANDOM}${RANDOM}${RANDOM}"
           {
-            echo "output<<UPDATE_EOF"
+            echo "output<<${DELIM}"
             echo "$OUTPUT"
-            echo "UPDATE_EOF"
+            echo "${DELIM}"
           } >> "$GITHUB_OUTPUT"
+          exit "$EXIT_CODE"
 
       - name: Generate input diff summary
         id: summary
