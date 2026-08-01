@@ -69,7 +69,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Read-only job: never leave the token in the checkout's git config.
           persist-credentials: false
@@ -197,7 +197,7 @@ jobs:
         # its tracking issue, which is the only channel the pin findings have.
         # The failure stays visible in this step's own status.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@18420e3271f74589575af831a523c833acda327f # codeql-bundle-v2.26.2
         with:
           sarif_file: ${{ runner.temp }}/zizmor.sarif
           category: zizmor
