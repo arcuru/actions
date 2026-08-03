@@ -1,35 +1,35 @@
 # Sets up a deps/ branch for dependency update workflows.
-# Creates a new branch from HEAD or rebases an existing remote branch onto main.
-# On rebase conflict, resets to main (the update step recreates content anyway).
+# Each run gets its own dated branch so a new update opens a new PR rather than
+# rewriting an existing one — rewriting reset the hold period on every run, which
+# kept long-lived deps PRs permanently held.
 #
 name: Setup Deps Branch
-description: Create or rebase a dependency update branch
+description: Create a dated dependency update branch
 
 inputs:
-  branch:
-    description: "Branch name (e.g. deps/cargo-update)"
+  prefix:
+    description: "Branch prefix (e.g. deps/cargo-update); the run date is appended"
     required: true
+
+outputs:
+  branch:
+    description: "Full branch name, <prefix>-YYYY-MM-DD"
+    value: ${{ steps.setup.outputs.branch }}
 
 runs:
   using: composite
   steps:
     - name: Setup branch
+      id: setup
       shell: bash
       env:
-        BRANCH: ${{ inputs.branch }}
+        PREFIX: ${{ inputs.prefix }}
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-        if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-          git fetch --unshallow origin 2>/dev/null || true
-          git fetch origin "$BRANCH"
-          git checkout -B "$BRANCH" "origin/$BRANCH"
-          if ! git rebase origin/main; then
-            echo "::warning::Rebase failed, resetting branch to origin/main"
-            git rebase --abort
-            git reset --hard origin/main
-          fi
-        else
-          git checkout -b "$BRANCH"
-        fi
+        # -B rather than -b so a same-day re-run reuses the branch instead of failing.
+        BRANCH="$PREFIX-$(date -u +%Y-%m-%d)"
+        git checkout -B "$BRANCH"
+
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"

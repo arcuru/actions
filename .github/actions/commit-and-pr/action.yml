@@ -1,12 +1,21 @@
-# Commits changed files, pushes the branch, and creates or updates a PR with
-# hold labels. Designed for use after setup-deps-branch and an update step.
+# Commits changed files, pushes the branch, and opens a PR with hold labels.
+# Designed for use after setup-deps-branch and an update step.
+#
+# Each run opens a fresh PR on its own dated branch. Updating a PR in place
+# instead would re-stamp `hold-until` on every run, so a PR updated more often
+# than its hold period would never become mergeable.
+#
+# Previous runs' PRs are deliberately left open. Each one is a distinct
+# snapshot of what the update looked like on its date, and closing them
+# automatically would discard that history along with any review already on
+# them. They accumulate; pruning is a human decision.
 #
 name: Commit and PR
-description: Commit changes, push, and create/update a dependency PR with hold period
+description: Commit changes, push, and open a dependency PR with hold period
 
 inputs:
   branch:
-    description: "Branch name (e.g. deps/cargo-update)"
+    description: "Branch name for this run, from setup-deps-branch's `branch` output"
     required: true
   files:
     description: "Space-separated paths to diff/stage"
@@ -100,13 +109,14 @@ runs:
 
         FULL_BODY="${PR_BODY}${HOLD_SECTION}"
 
+        # A same-day re-run pushes to the same dated branch, so reuse that PR.
+        # Its hold-until is identical, so refreshing the body resets nothing.
         EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
 
         if [ -n "$EXISTING_PR" ]; then
           gh pr edit "$EXISTING_PR" --body "$FULL_BODY"
-          gh pr edit "$EXISTING_PR" --add-label dependencies --add-label on-hold
           gh pr comment "$EXISTING_PR" --body "$UPDATE_COMMENT"
-          echo "number=$EXISTING_PR" >> "$GITHUB_OUTPUT"
+          PR_NUM="$EXISTING_PR"
         else
           PR_URL=$(gh pr create \
             --head "$BRANCH" \
@@ -116,8 +126,9 @@ runs:
             --label dependencies \
             --label on-hold)
           PR_NUM=$(echo "$PR_URL" | grep -o '[0-9]*$')
-          echo "number=$PR_NUM" >> "$GITHUB_OUTPUT"
         fi
+
+        echo "number=$PR_NUM" >> "$GITHUB_OUTPUT"
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         BRANCH: ${{ inputs.branch }}

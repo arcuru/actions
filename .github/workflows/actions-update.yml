@@ -76,9 +76,10 @@ jobs:
           extra-trusted-public-keys: ${{ inputs.extra-trusted-public-keys }}
 
       - name: Setup deps branch
+        id: branch
         uses: arcuru/actions/.github/actions/setup-deps-branch@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
-          branch: deps/actions-update
+          prefix: deps/actions-update
 
       # Discovery and parsing come from the shared scan-pins action, so the
       # updater and the pin verifier work from one definition of what a pin is
@@ -251,7 +252,7 @@ jobs:
       - name: Commit and create PR
         uses: arcuru/actions/.github/actions/commit-and-pr@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
-          branch: deps/actions-update
+          branch: ${{ steps.branch.outputs.branch }}
           files: ${{ steps.update.outputs.files }}
           commit-message: "chore(deps): update GitHub Actions versions"
           pr-title: "chore(deps): update GitHub Actions versions"
