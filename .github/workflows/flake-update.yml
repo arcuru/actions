@@ -70,9 +70,10 @@ jobs:
           extra-trusted-public-keys: ${{ inputs.extra-trusted-public-keys }}
 
       - name: Setup deps branch
+        id: branch
         uses: arcuru/actions/.github/actions/setup-deps-branch@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
-          branch: deps/flake-update
+          prefix: deps/flake-update
 
       - name: Capture pre-update metadata
         id: before
@@ -145,7 +146,7 @@ jobs:
       - name: Commit and create PR
         uses: arcuru/actions/.github/actions/commit-and-pr@c8144123ad5a2c6316b7becab8233b68dfa637d9 # main
         with:
-          branch: deps/flake-update
+          branch: ${{ steps.branch.outputs.branch }}
           files: flake.lock
           commit-message: "chore(deps): update flake inputs"
           pr-title: "chore(deps): update flake inputs"

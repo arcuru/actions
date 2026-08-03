@@ -14,8 +14,8 @@ Pinning is by full commit SHA, with a trailing version comment that matches the 
 | Action | Purpose |
 |---|---|
 | [`setup-nix`](.github/actions/setup-nix/action.yml) | Install Nix with `nix-installer-action`, optionally enable Magic Nix Cache, optionally configure a custom binary cache (substituters / trusted keys / push), install `nix-fast-build`. |
-| [`setup-deps-branch`](.github/actions/setup-deps-branch/action.yml) | Create a new `deps/<name>` branch, or rebase an existing one onto `main`. Falls back to `reset --hard` on rebase conflict. |
-| [`commit-and-pr`](.github/actions/commit-and-pr/action.yml) | Stage, commit, push, and open or update a PR with `dependencies` + `on-hold` labels and a `hold-until: YYYY-MM-DD` body marker. |
+| [`setup-deps-branch`](.github/actions/setup-deps-branch/action.yml) | Create a dated `deps/<name>-YYYY-MM-DD` branch from HEAD. Outputs the full branch name. |
+| [`commit-and-pr`](.github/actions/commit-and-pr/action.yml) | Stage, commit, push, and open a PR with `dependencies` + `on-hold` labels and a `hold-until: YYYY-MM-DD` body marker. Each run gets its own dated branch and PR; earlier runs' PRs stay open. |
 | [`scan-pins`](.github/actions/scan-pins/action.yml) | Discover SHA-pinned `uses:` references across workflows and composite-action manifests, as JSON. Scans the working directory, or any remote ref via the API without a checkout. |
 | [`verify-pins`](.github/actions/verify-pins/action.yml) | Check scanned pins for re-pointed upstream tags and published security advisories. |
 
@@ -50,7 +50,7 @@ All six follow the same calling convention: each consumer repo ships a thin wrap
 | [`actions-update`](.github/workflows/actions-update.yml) | `schedule` (monthly) | `PAT_TOKEN` | Bump every SHA-pinned `uses:` in `.github/workflows/` to the latest release tag |
 | [`security-audit`](.github/workflows/security-audit.yml) | `schedule` (daily) | — | `cargo deny check advisories`; opens a tracking issue on hit, closes it on resolution |
 | [`dependency-hold`](.github/workflows/dependency-hold.yml) | `pull_request` | — | Fails any PR on a `deps/*` branch that still has the `on-hold` label |
-| [`update-hold`](.github/workflows/update-hold.yml) | `schedule` (daily) | — | Removes `on-hold` once the PR's `hold-until: YYYY-MM-DD` marker has passed **and** the PR's pinned actions verify |
+| [`update-hold`](.github/workflows/update-hold.yml) | `schedule` (daily) | `PAT_TOKEN` | Removes `on-hold` once the PR's `hold-until: YYYY-MM-DD` marker has passed **and** the PR's pinned actions verify |
 | [`actions-audit`](.github/workflows/actions-audit.yml) | `schedule` (daily) | — | Re-resolves every pinned action against upstream tags and the advisory database, and audits the workflows themselves with `zizmor`; opens a tracking issue on hit, closes it on resolution, and uploads the `zizmor` findings as SARIF to code scanning |
 | [`codeberg-mirror`](.github/workflows/codeberg-mirror.yml) | `push` | `ssh-private-key` | Mirror the caller repo to a Codeberg/Forgejo destination over SSH with ed25519 host-key pinning |
 
@@ -122,7 +122,7 @@ jobs:
     secrets: inherit
 ```
 
-**`security-audit.yml`** (also the pattern for `update-hold` — schedule-triggered, no secrets):
+**`security-audit.yml`** (schedule-triggered, no secrets):
 
 ```yaml
 name: "Deps: Security Audit"
@@ -178,12 +178,53 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   hold:
     uses: arcuru/actions/.github/workflows/dependency-hold.yml@<sha>  # vX.Y.Z
     secrets: inherit
 ```
+
+**`update-hold.yml`** (schedule-triggered; needs `PAT_TOKEN`, see below):
+
+```yaml
+name: "Deps: Hold Expiry"
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-hold:
+    uses: arcuru/actions/.github/workflows/update-hold.yml@<sha>  # vX.Y.Z
+    secrets: inherit
+```
+
+### Wiring the hold gate as a required check
+
+The hold gate only blocks a merge if branch protection requires it, and the
+context name is **not** `Dependency Hold`. A reusable workflow's check is
+reported as `<caller job id> / <called job name>`, so with the wrapper above
+the required status check to configure is:
+
+```
+hold / Dependency Hold
+```
+
+Requiring the bare `Dependency Hold` instead silently blocks *every* PR in the
+repo: that context is never reported, so it sits permanently missing and only
+an admin bypass can merge.
+
+`update-hold` needs `PAT_TOKEN` because it removes the `on-hold` label, and
+that `unlabeled` event must re-trigger the hold gate so the gate can replace
+its own failing check. Events authored by `GITHUB_TOKEN` do not trigger other
+workflows, so a `GITHUB_TOKEN` removal leaves the check red and the PR blocked
+even though the hold has expired.
 
 **`codeberg-mirror.yml`** (push-triggered):
 

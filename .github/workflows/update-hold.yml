@@ -1,9 +1,12 @@
 # Daily check that releases expired dependency holds. Scans open PRs with
 # the "on-hold" label, parses the <!-- hold-until: YYYY-MM-DD --> comment
-# from the PR body, and removes the label when the date is reached. After
-# label removal, creates a passing "Dependency Hold" check run on the PR's
-# HEAD commit so the required status check is satisfied without relying on
-# the unlabeled event (which GITHUB_TOKEN cannot trigger cross-workflow).
+# from the PR body, and removes the label when the date is reached.
+#
+# The label is removed with PAT_TOKEN, not GITHUB_TOKEN: the resulting
+# `unlabeled` event has to re-trigger the Hold Gate workflow so it can replace
+# its own failing check, and GITHUB_TOKEN events do not trigger other
+# workflows. Do not swap this back to GITHUB_TOKEN — the gate's check would
+# stay red forever and block the merge the expiry just authorised.
 #
 # Reaching the hold date is necessary but not sufficient. The point of aging a
 # dependency PR is to give a compromise time to surface, so each expired PR has
@@ -41,7 +44,10 @@ on:
         required: false
         default: "false"
         type: string
-    # No secrets required.
+    secrets:
+      PAT_TOKEN:
+        description: "Fine-grained PAT with pull-requests:write on the calling repo. Required so removing the on-hold label re-triggers the Hold Gate workflow."
+        required: true
 
 concurrency:
   group: deps-hold-expiry
@@ -187,27 +193,15 @@ jobs:
            (steps.verify.outputs.status == 'ok' ||
             (steps.verify.outputs.status == 'warning' && inputs.block-on-warning != 'true')))
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           NUMBER: ${{ matrix.pr.number }}
-          HEAD_SHA: ${{ matrix.pr.head_sha }}
           HOLD_DATE: ${{ matrix.pr.hold_date }}
           REPORT: ${{ steps.verify.outputs.report }}
           VERIFY_PINS: ${{ inputs.verify-pins }}
         run: |
+          # PAT-authored removal, so the `unlabeled` event re-runs the Hold
+          # Gate and flips its check green on the PR's current head.
           gh pr edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label on-hold
-
-          # Create a passing check run on the PR's HEAD commit so the
-          # required "Dependency Hold" status check is satisfied. We
-          # can't rely on the unlabeled event re-triggering the Hold
-          # Gate workflow because GITHUB_TOKEN events don't trigger
-          # other workflows (GitHub's anti-recursion policy).
-          gh api "repos/$GITHUB_REPOSITORY/check-runs" --method POST \
-            -f name="Dependency Hold" \
-            -f head_sha="$HEAD_SHA" \
-            -f status="completed" \
-            -f conclusion="success" \
-            -f "output[title]=Hold expired" \
-            -f "output[summary]=Hold period expired (was until ${HOLD_DATE}). Dependency update may proceed."
 
           # Report what verification actually did, so a released hold reads as a
           # positive result rather than an absence of noise.
