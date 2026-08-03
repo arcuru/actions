@@ -198,6 +198,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   update-hold:
@@ -219,6 +220,13 @@ hold / Dependency Hold
 Requiring the bare `Dependency Hold` instead silently blocks *every* PR in the
 repo: that context is never reported, so it sits permanently missing and only
 an admin bypass can merge.
+
+Nothing in this repo posts a synthetic check run under that name, and nothing
+should. Check runs are keyed on `(name, head_sha)`, so a forged result is only
+ever superseded by another run of the same name on the same commit — a forged
+failure would pin a PR red for that commit even after the underlying problem
+was resolved. Blocking is the `on-hold` label's job: while the label is on, the
+Hold Gate itself fails, which is a real check that clears when the label does.
 
 `update-hold` needs `PAT_TOKEN` because it removes the `on-hold` label, and
 that `unlabeled` event must re-trigger the hold gate so the gate can replace

@@ -12,8 +12,8 @@
 # dependency PR is to give a compromise time to surface, so each expired PR has
 # its pinned actions re-verified before the hold is released: upstream tags are
 # re-resolved and the GitHub Advisory Database is queried. On a critical finding
-# the label stays on, the check run fails, and the PR is left blocked for a
-# human. Without this the hold is only a delay — nothing would notice a
+# the label stays on, so the Hold Gate keeps failing and the PR is left blocked
+# for a human. Without this the hold is only a delay — nothing would notice a
 # compromise disclosed on day three of a seven-day wait.
 #
 # Expired PRs are fanned out into a matrix so each one can be scanned at its own
@@ -121,7 +121,6 @@ jobs:
       # nothing on a private repository and the hold releases unverified.
       contents: read
       pull-requests: write
-      checks: write
     strategy:
       fail-fast: false
       matrix:
@@ -161,19 +160,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NUMBER: ${{ matrix.pr.number }}
-          HEAD_SHA: ${{ matrix.pr.head_sha }}
           HOLD_DATE: ${{ matrix.pr.hold_date }}
           REPORT: ${{ steps.verify.outputs.report }}
         run: |
+          # Blocking is the on-hold label's job, not a synthetic check run.
+          # A check run named "Dependency Hold" collides with the Hold Gate's
+          # own required context, and nothing would ever supersede it: check
+          # runs are keyed on (name, head_sha), so a failure posted here would
+          # pin the PR red for that commit even after a human resolved the
+          # finding and a later run released the hold.
           echo "::error::PR #${NUMBER}: pin verification failed, keeping hold."
-
-          gh api "repos/$GITHUB_REPOSITORY/check-runs" --method POST \
-            -f name="Dependency Hold" \
-            -f head_sha="$HEAD_SHA" \
-            -f status="completed" \
-            -f conclusion="failure" \
-            -f "output[title]=Pin verification failed" \
-            -f "output[summary]=$REPORT"
 
           COMMENT=$(printf '%s\n\n%s\n\n%s\n' \
             "Hold period expired (${HOLD_DATE}), but **pin verification failed** — keeping the \`on-hold\` label." \
