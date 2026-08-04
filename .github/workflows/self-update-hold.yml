@@ -1,5 +1,10 @@
 # Self-dogfood: remove the on-hold label from this repo's own deps/*
 # PRs once their hold-until date is reached.
+#
+# Runs in the automation environment: this repo's PAT_TOKEN is an environment
+# secret, and `secrets: inherit` can only resolve it inside a job that declares
+# that environment. Without it the called workflow fails before any step runs,
+# with "Secret PAT_TOKEN is required, but not provided while calling".
 name: "Self: update-hold"
 
 on:
@@ -14,4 +19,6 @@ permissions:
 jobs:
   call:
     uses: ./.github/workflows/update-hold.yml
+    with:
+      environment: automation
     secrets: inherit
