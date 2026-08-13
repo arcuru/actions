@@ -4,6 +4,10 @@
 # has the "on-hold" label. Uses live label queries instead of event payload
 # data so that manual re-runs always see the current label state.
 #
+# Safe to call from a merge_group trigger: a merge group has no head_ref, so
+# the branch test below passes immediately. The hold gates entry into the
+# queue, not the queue itself.
+#
 name: "Deps: Hold Gate"
 
 on:
@@ -20,8 +24,12 @@ permissions:
   contents: read
   pull-requests: read # required for `gh api .../pulls/N` label query below
 
+# A merge group carries no pull request, so the number is empty for every one
+# of them and they would all share a single group — with cancel-in-progress
+# that means one batch cancels another, and a cancelled required check stalls
+# the queue. github.ref is the unique per-batch queue branch there.
 concurrency:
-  group: deps-hold-gate-${{ github.event.pull_request.number }}
+  group: deps-hold-gate-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
