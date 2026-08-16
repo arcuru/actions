@@ -94,7 +94,7 @@ jobs:
         env:
           # Online audits are the point of running here; they need a token.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ZIZMOR_VERSION: "1.28.0"
+          ZIZMOR_VERSION: "1.29.0"
           SARIF_FILE: ${{ runner.temp }}/zizmor.sarif
         run: |
           set -uo pipefail

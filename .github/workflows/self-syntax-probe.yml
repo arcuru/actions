@@ -10,10 +10,6 @@
 #
 # This deliberately does not check out the repository. The absence of a
 # checkout step is part of the test: if `$/` needed one, these jobs would fail.
-#
-# IMPORTANT: this workflow and the action it calls are excluded from actionlint
-# in ci.yml, and must not merge to main while that exclusion is needed. See
-# that exclusion's comment, and the note in README.md, for why.
 name: "Self: self-syntax probe"
 
 on:

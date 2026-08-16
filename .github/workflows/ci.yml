@@ -42,35 +42,14 @@ jobs:
           # `{owner}/{repo}@{ref}` and `./path`. GitHub shipped `$/` on
           # 2026-07-30; actionlint's last release predates it by four months.
           #
-          # Excluding the file is the whole available remedy — the rejection
-          # happens while parsing, so `-ignore` (which filters emitted
-          # messages) cannot reach it. Keep the list to files that genuinely
-          # cannot be parsed, and delete it once actionlint understands `$/`.
-          UNPARSEABLE=(
-            .github/workflows/self-syntax-probe.yml
-          )
-
-          FILES=()
-          for FILE in .github/workflows/*.yml; do
-            SKIP=""
-            for EXCLUDED in "${UNPARSEABLE[@]}"; do
-              if [ "$FILE" = "$EXCLUDED" ]; then
-                SKIP="yes"
-                break
-              fi
-            done
-            if [ -z "$SKIP" ]; then
-              FILES+=("$FILE")
-            fi
-          done
-
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "::error::No workflow files left to lint; the exclusion list has swallowed the lot."
-            exit 1
-          fi
-
-          for EXCLUDED in "${UNPARSEABLE[@]}"; do
-            echo "::notice::${EXCLUDED} is not linted: actionlint cannot parse the self-repository syntax it exercises."
-          done
-
-          nix run nixpkgs#actionlint -- -color "${FILES[@]}"
+          # The scoped `-ignore` below suppresses exactly that parse-time
+          # rejection and nothing else: in actionlint's regex dialect `\$`
+          # matches a literal `$`, and the leading `"` anchors the pattern to
+          # the quoted action name, so a `$/` self-reference is ignored while a
+          # genuinely malformed ref (e.g. `uses: actions/checkout` with no
+          # `@ref`) is still reported. Delete the flag once actionlint
+          # understands `$/` (upstream issue #711).
+          nix run nixpkgs#actionlint -- \
+            -color \
+            -ignore 'specifying action "\$/' \
+            .github/workflows/*.yml

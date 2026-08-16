@@ -397,16 +397,11 @@ than reading the file alone — flagging references to actions with published
 advisories and commits that are not reachable from the repository they appear
 to come from.
 
-> **Blocked: `zizmor` cannot parse self-repository syntax.** Through v1.28.0 it
-> rejects a `$/` `uses:` value as malformed and aborts with *"no audit was
-> performed"*. The failure is repo-wide rather than per-file, and happens while
-> building the model — before any `ignore:` entry or `# zizmor: ignore` comment
-> could apply — so a single `$/` reference anywhere in the tree takes the whole
-> zizmor half of the daily audit with it. `actionlint` (v1.7.12) rejects the
-> same values, though only for the files it is handed, which `ci.yml` works
-> around by name. Until `zizmor` parses `$/`, adopting it here trades the
-> workflow audit for the pin coherence it buys, which is not a trade this
-> repository should make.
+> `zizmor` has parsed `$/` self-references since v1.29.0, which `actions-audit`
+> pins. `actionlint` (v1.7.12) still rejects the syntax, so `ci.yml` lints with
+> a scoped `-ignore` that suppresses only the `$/` parse error and nothing else —
+> a genuinely malformed `uses:` value is still caught. The ignore can be retired
+> once `actionlint` ships `$/` support (upstream issue #711).
 
 Findings are uploaded as SARIF, so they land in the repo's code scanning alerts
 with per-line annotations and their own dismissal state, instead of being flattened
