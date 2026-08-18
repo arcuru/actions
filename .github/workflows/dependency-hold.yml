@@ -36,6 +36,7 @@ jobs:
   dependency-hold:
     name: Dependency Hold
     runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 15
     steps:
       - name: Check hold status
         env:
