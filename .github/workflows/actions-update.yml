@@ -57,6 +57,7 @@ jobs:
   actions-update:
     name: Actions Update
     runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 20
     environment: ${{ inputs.environment }}
     if: github.repository_owner == 'arcuru'
     permissions:
