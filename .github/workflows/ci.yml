@@ -35,4 +35,22 @@ jobs:
         uses: ./.github/actions/setup-nix
 
       - name: Run actionlint
-        run: nix run nixpkgs#actionlint -- -color .github/workflows/*.yml
+        run: |
+          set -uo pipefail
+
+          # actionlint (1.7.12, current) rejects the self-repository syntax
+          # `$/<path>` as a malformed `uses:` value: it accepts only
+          # `{owner}/{repo}@{ref}` and `./path`. GitHub shipped `$/` on
+          # 2026-07-30; actionlint's last release predates it by four months.
+          #
+          # The scoped `-ignore` below suppresses exactly that parse-time
+          # rejection and nothing else: in actionlint's regex dialect `\$`
+          # matches a literal `$`, and the leading `"` anchors the pattern to
+          # the quoted action name, so a `$/` self-reference is ignored while a
+          # genuinely malformed ref (e.g. `uses: actions/checkout` with no
+          # `@ref`) is still reported. Delete the flag once actionlint
+          # understands `$/` (upstream issue #711).
+          nix run nixpkgs#actionlint -- \
+            -color \
+            -ignore 'specifying action "\$/' \
+            .github/workflows/*.yml
