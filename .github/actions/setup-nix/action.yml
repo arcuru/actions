@@ -1,6 +1,10 @@
 # Installs Nix via DeterminateSystems' installer, configures optional
-# extra substituters / trusted keys / push target, optionally enables
-# Magic Nix Cache, and installs nix-fast-build.
+# extra substituters / trusted keys / push target, and optionally enables
+# Magic Nix Cache.
+#
+# It deliberately installs no build tooling. A repo that runs nix-fast-build
+# gets it from its own flake, so the version is locked in that repo's
+# flake.lock rather than resolved from the runner's rolling flake registry.
 #
 # Defaults are tuned for repos with no custom binary cache: magic cache
 # is on, no extra substituters, no push. Pass the cache.* inputs to
@@ -61,10 +65,6 @@ runs:
     - name: Enable Magic Nix Cache
       if: inputs.enable-magic-cache == 'true'
       uses: DeterminateSystems/magic-nix-cache-action@6221693898146dc97e38ad0e013488a16477a4c4 # v9
-
-    - name: Install nix-fast-build
-      shell: bash
-      run: nix profile install nixpkgs#nix-fast-build
 
     - name: Configure cache push
       id: push-setup
