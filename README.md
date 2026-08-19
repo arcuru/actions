@@ -13,7 +13,7 @@ Pinning is by full commit SHA, with a trailing version comment that matches the 
 
 | Action | Purpose |
 |---|---|
-| [`setup-nix`](.github/actions/setup-nix/action.yml) | Install Nix with `nix-installer-action`, optionally enable Magic Nix Cache, optionally configure a custom binary cache (substituters / trusted keys / push), install `nix-fast-build`. |
+| [`setup-nix`](.github/actions/setup-nix/action.yml) | Install Nix with `nix-installer-action`, optionally enable Magic Nix Cache, optionally configure a custom binary cache (substituters / trusted keys / push). Installs no build tooling. |
 | [`setup-deps-branch`](.github/actions/setup-deps-branch/action.yml) | Create a dated `deps/<name>-YYYY-MM-DD` branch from HEAD. Outputs the full branch name. |
 | [`commit-and-pr`](.github/actions/commit-and-pr/action.yml) | Stage, commit, push, and open a PR with `dependencies` + `on-hold` labels and a `hold-until: YYYY-MM-DD` body marker. Each run gets its own dated branch and PR; earlier runs' PRs stay open. |
 | [`scan-pins`](.github/actions/scan-pins/action.yml) | Discover SHA-pinned `uses:` references across workflows and composite-action manifests, as JSON. Scans the working directory, or any remote ref via the API without a checkout. |
@@ -38,6 +38,8 @@ The trailing version comment is required — the `actions-update` workflow uses 
 | `push-target` | `""` | Cache push destination URL (e.g. `s3://my-cache?region=auto&endpoint=…`). |
 
 Output `push-args` is empty unless both `signing-key` and `push-target` are set; pass it to `nix-fast-build` to push built paths back into the cache in the same step.
+
+The action does not install `nix-fast-build`. Add it to your flake's dev shell and invoke it through `nix develop -c`, so CI and local runs use the same locked version.
 
 ## Reusable workflows
 
