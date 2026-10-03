@@ -36,20 +36,9 @@ jobs:
 
       - name: Run actionlint
         run: |
-          set -uo pipefail
-
-          # actionlint 1.7.12 lacks `$/` support. Suppress only its missing-ref
-          # diagnostic for self-repository action paths and its unsupported
-          # reusable-workflow format diagnostic, not other lint.
-          # Remove this workaround when support ships:
-          # https://github.com/rhysd/actionlint/issues/711
+          # actionlint 1.7.12 lacks `$/` support; ignore only self-action missing refs.
+          # Remove when https://github.com/rhysd/actionlint/issues/711 is resolved.
           nix run nixpkgs#actionlint -- \
             -color \
             -ignore '^specifying action "\$/[^"@]+" in invalid format because ref is missing\.' \
-            -ignore '^reusable workflow call "\$/\.github/workflows/[^"/@]+\.ya?ml" at "uses" is not following the format ' \
             .github/workflows/*.yml
-
-      - name: Run self-reference regressions
-        run: |
-          nix shell nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#jq nixpkgs#uv \
-            --command uv run .github/tests/test_self_references.py

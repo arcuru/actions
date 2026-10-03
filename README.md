@@ -321,60 +321,14 @@ that the commit is reachable from it. A commit that never landed on the branch,
 because it was squashed away or force-pushed over, resolves and vanishes when
 that line is garbage collected.
 
-**Self-repository references.** This repo's own workflows reach its composite
-actions with [self-repository syntax][self-syntax]: `uses: $/.github/actions/scan-pins`,
-with no owner, no ref and no version comment. It resolves to the repository of
-the workflow being run, at the exact commit being run.
-
-That is not a convenience. A relative `./` path cannot be used here, because a
-reusable workflow's steps execute against the *caller's* workspace, so these
-references previously had to name this repository absolutely and pin a SHA on
-`main`. Doing so made the version a consumer pinned and the action version it
-actually ran two independent facts, kept aligned by hand: a caller on `v0.2.1`
-ran whichever `setup-nix` commit was hardcoded inside `v0.2.1`, which was only
-ever the right one by maintenance. `$/` makes them the same fact. It also
-retires the bookkeeping that grew around the old arrangement — the updater
-skipping these references (bumping one manufactured the drift the next run
-found), the audit comparing action content against the tree, and a
-`ref-version-mismatch` suppression covering six whole files.
-
-These references are still scanned and counted, with a `ref_kind` of `self`.
-They are exempt from every upstream check, since there is no upstream to
-resolve, but they are never silently dropped: a reference missing from the scan
-is indistinguishable from a repository that has none, which is how a change
-swapping `$/` back for a mutable `@main` would otherwise pass verification.
+**Self-repository references.** This repo's workflows use
+[self-repository syntax][self-syntax], e.g. `uses: $/.github/actions/scan-pins`,
+to resolve actions from the defining workflow's repository at its running commit,
+not the caller's workspace. No ref or version comment is needed. These references
+are scanned and counted as `self`, but require no upstream verification or update.
+This syntax is available on github.com with runner agent **2.336.0 or newer**.
 
 [self-syntax]: https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/
-
-### Self-reference verification
-
-`$/` is available on github.com and requires runner agent **2.336.0 or newer**.
-The [probe workflow](.github/workflows/self-syntax-probe.yml) tests direct action
-steps and self-repository reusable-workflow calls on `ubuntu-latest`,
-`ubicloud-standard-2` (x64) and `ubicloud-standard-2-arm` (ARM64).
-Each path reaches the nested composite action, propagates its marker and fails
-if the marker is empty or wrong. None of the probe jobs checks out a workspace.
-The reusable workflow asserts the marker on each runner separately; a successful
-matrix aggregate alone is not the observable.
-
-Local regressions exercise discovery, verification, updater skipping, the exact
-CI lint ignores and the probe's real marker/assertion scripts:
-
-```sh
-nix shell nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#jq nixpkgs#uv \
-  --command uv run .github/tests/test_self_references.py
-```
-
-These fixtures and successful linting are **not runner execution evidence**.
-The probe runs on ordinary `pull_request` events and supports `workflow_dispatch`
-for manual re-checks; it has no push or scheduled trigger. Before merging, check
-all six jobs on the upstream PR: direct and reusable/nested execution on all
-three runner images. No separate upstream branch push is required.
-The owner gate deliberately prevents this from running in a fork. The in-repo
-probe does not test a different consumer repository or GitHub Enterprise Server;
-consumer workflows are not changed here. Hosted support alone cannot establish
-Ubicloud support, and an unsupported Ubicloud image requires an owner decision,
-not removal of that matrix entry.
 
 **Reference resolvability.** Confirm the action or reusable workflow actually
 exists at the pinned commit. A pin can be internally consistent — the SHA really
@@ -429,13 +383,11 @@ than reading the file alone — flagging references to actions with published
 advisories and commits that are not reachable from the repository they appear
 to come from.
 
-> `actions-audit` pins stable `zizmor` v1.30.1, which parses `$/` references
-> in workflows and composite actions. `actionlint` v1.7.12 still lacks support
-> ([rhysd/actionlint#711](https://github.com/rhysd/actionlint/issues/711)), so
-> `ci.yml` retains it with two diagnostic-specific ignores: missing refs on
-> `$/` action paths and the unsupported `$/` reusable-workflow call format.
-> Missing external refs, shell errors and unrelated workflow checks remain
-> enabled. Remove the ignores when native support ships.
+> `actions-audit` uses stable `zizmor` v1.30.1 with native `$/` support.
+> `actionlint` v1.7.12 lacks support
+> ([rhysd/actionlint#711](https://github.com/rhysd/actionlint/issues/711)), so CI
+> ignores only the missing-ref diagnostic for `$/` action paths. External refs
+> and other lint checks remain enabled; remove the ignore when support ships.
 
 Findings are uploaded as SARIF, so they land in the repo's code scanning alerts
 with per-line annotations and their own dismissal state, instead of being flattened

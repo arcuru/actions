@@ -1,19 +1,4 @@
-# zizmor configuration — https://docs.zizmor.sh/configuration/
-#
-# Each suppression below is a deliberate, reviewed exception. At zizmor's
-# default persona, everything else is expected to pass; new findings should be
-# fixed, not added here.
-#
-# There are currently none. The previous entry suppressed ref-version-mismatch
-# across six whole files, because this repository referenced its own composite
-# actions absolutely — a reusable workflow's steps run against the caller's
-# workspace, so a relative path could not reach them — and their `# main`
-# comments named the branch each reference tracked rather than a release,
-# which zizmor correctly resolved as permanently diverged.
-#
-# Self-repository syntax removes the reference rather than the finding: `$/`
-# carries no ref and no version comment, so there is nothing to diverge. That
-# also un-masks the third-party pins in those files, which the whole-file
-# entries had been suppressing as collateral — the narrower alternative was
-# fifteen line-pinned entries that re-drifted on any edit above them.
+# Self-repository (`$/`) references have no ref/version comment to diverge,
+# so the old whole-file ref-version-mismatch ignores are no longer needed.
+# Keep third-party pins visible to this audit.
 rules: {}
