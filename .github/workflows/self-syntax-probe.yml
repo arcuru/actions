@@ -2,11 +2,11 @@
 #
 # `$/<path>` resolves to the repository of the workflow being run, at the exact
 # commit being run, with no checkout. GitHub announced it on 2026-07-30 and
-# requires runner agent 2.336.0 or newer. Hosted runners get that on GitHub's
-# schedule; ubicloud ships its own images and refreshes them monthly following
-# GitHub's releases, so hosted support says nothing about ubicloud support —
-# and every consumer of this repository runs on ubicloud. Both are tested here,
-# on x64 and arm64, because they are separate images.
+# requires runner agent 2.336.0 or newer. Ubicloud ships its own images, so
+# hosted support does not establish Ubicloud support. Both are tested here;
+# Ubicloud x64 and ARM64 are separate images. Each image exercises direct and
+# reusable-workflow calls,
+# including a nested self-repository reference inside the composite action.
 #
 # This deliberately does not check out the repository. The absence of a
 # checkout step is part of the test: if `$/` needed one, these jobs would fail.
@@ -47,6 +47,7 @@ jobs:
           - ubicloud-standard-2
           - ubicloud-standard-2-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -66,3 +67,19 @@ jobs:
             exit 1
           fi
           echo "Self-repository syntax works on this runner, including nested composition."
+
+  reusable-probe:
+    name: "reusable probe (${{ matrix.runner }})"
+    if: github.repository_owner == 'arcuru'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubicloud-standard-2
+          - ubicloud-standard-2-arm
+    permissions:
+      contents: read
+    uses: $/.github/workflows/self-syntax-probe-reusable.yml
+    with:
+      runner: ${{ matrix.runner }}

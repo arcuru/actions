@@ -20,11 +20,12 @@
 # Output is a JSON array of objects:
 #   { file, owner, repo, subpath, ref, tag, class, ref_kind }
 #
-# `ref_kind` is `sha` for a SHA-pinned reference and `unpinned` for anything
-# else (`@v4`, `@main`). Unpinned references are reported rather than skipped:
-# a pin that disappears from the scan is indistinguishable from a repository
-# with nothing to check, which is how a PR that removes pinning would otherwise
-# pass verification.
+# `ref_kind` is `sha` for a SHA-pinned reference, `unpinned` for anything
+# else (`@v4`, `@main`), and `self` for a self-repository (`$/`) reference,
+# which names no ref at all. Unpinned references are reported rather than
+# skipped: a pin that disappears from the scan is indistinguishable from a
+# repository with nothing to check, which is how a PR that removes pinning
+# would otherwise pass verification.
 #
 # `class` describes the version comment and drives severity:
 #   immutable  exact semver tag (v7.0.0). Must never move.
@@ -32,6 +33,8 @@
 #   branch     branch-tracking pin (main). Moves by design.
 #   unknown    a comment that is neither, so nothing can be resolved from it.
 #   none       no comment at all.
+#   self       self-repository reference. No ref and no comment; resolves
+#              to the commit being run, so nothing can drift.
 
 # Classify a version comment. See the `class` notes above.
 pins_classify() {

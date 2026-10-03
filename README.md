@@ -346,6 +346,35 @@ swapping `$/` back for a mutable `@main` would otherwise pass verification.
 
 [self-syntax]: https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/
 
+### Self-reference verification
+
+`$/` is available on github.com and requires runner agent **2.336.0 or newer**.
+The [probe workflow](.github/workflows/self-syntax-probe.yml) tests direct action
+steps and self-repository reusable-workflow calls on `ubuntu-latest`,
+`ubicloud-standard-2` (x64) and `ubicloud-standard-2-arm` (ARM64).
+Each path reaches the nested composite action, propagates its marker and fails
+if the marker is empty or wrong. None of the probe jobs checks out a workspace.
+The reusable workflow asserts the marker on each runner separately; a successful
+matrix aggregate alone is not the observable.
+
+Local regressions exercise discovery, verification, updater skipping, the exact
+CI lint ignores and the probe's real marker/assertion scripts:
+
+```sh
+nix shell nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#jq nixpkgs#uv \
+  --command uv run .github/tests/test_self_references.py
+```
+
+These fixtures and successful linting are **not runner execution evidence**.
+Before merging, the repository owner must publish the candidate on the upstream
+`feat/self-repository-syntax` branch (the probe's push trigger) and check all six
+jobs: direct and reusable/nested execution on all three runner images.
+The owner gate deliberately prevents this from running in a fork. The in-repo
+probe does not test a different consumer repository or GitHub Enterprise Server;
+consumer workflows are not changed here. Hosted support alone cannot establish
+Ubicloud support, and an unsupported Ubicloud image requires an owner decision,
+not removal of that matrix entry.
+
 **Reference resolvability.** Confirm the action or reusable workflow actually
 exists at the pinned commit. A pin can be internally consistent — the SHA really
 is what its tag resolves to — while naming a path that is not present there,
@@ -399,11 +428,13 @@ than reading the file alone — flagging references to actions with published
 advisories and commits that are not reachable from the repository they appear
 to come from.
 
-> `zizmor` has parsed `$/` self-references since v1.29.0, which `actions-audit`
-> pins. `actionlint` (v1.7.12) still rejects the syntax, so `ci.yml` lints with
-> a scoped `-ignore` that suppresses only the `$/` parse error and nothing else —
-> a genuinely malformed `uses:` value is still caught. The ignore can be retired
-> once `actionlint` ships `$/` support (upstream issue #711).
+> `actions-audit` pins stable `zizmor` v1.30.1, which parses `$/` references
+> in workflows and composite actions. `actionlint` v1.7.12 still lacks support
+> ([rhysd/actionlint#711](https://github.com/rhysd/actionlint/issues/711)), so
+> `ci.yml` retains it with two diagnostic-specific ignores: missing refs on
+> `$/` action paths and the unsupported `$/` reusable-workflow call format.
+> Missing external refs, shell errors and unrelated workflow checks remain
+> enabled. Remove the ignores when native support ships.
 
 Findings are uploaded as SARIF, so they land in the repo's code scanning alerts
 with per-line annotations and their own dismissal state, instead of being flattened

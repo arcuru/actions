@@ -1,9 +1,9 @@
 # Self-dogfood: keep this repo's own SHA pins fresh.
 # Bumps actions/checkout, DeterminateSystems/*, etc. inside our own
-# workflow files. Does NOT bump this repo's references to its own actions
-# (arcuru/actions/.github/actions/...): they track this repo's main, which
-# merging that PR advances, so every run would find drift it just created.
-# Those are bumped by hand when the audit reports their content has drifted.
+# workflow files. This repo's references to its own actions use
+# self-repository syntax (`uses: $/.github/actions/...`), which carries no
+# ref and no version comment, so there is nothing here for the updater to
+# bump and nothing that can drift out of step with the tree.
 name: "Self: actions-update"
 
 on:

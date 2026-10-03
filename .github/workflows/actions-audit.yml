@@ -16,12 +16,14 @@
 # Re-resolving each pinned immutable tag daily surfaces that divergence from
 # public API data alone, days before an advisory is published.
 #
-# A repository that ships its own actions also references them absolutely, and
-# those references are checked on a different axis: not "is the SHA old" — every
-# commit makes it older — but whether the referenced action's content has moved
+# Legacy absolute references to a repository's own actions are checked on a
+# different axis: not "is the SHA old" — every commit makes it older — but
+# whether the referenced action's content has moved
 # on since the pin, which is when a workflow silently runs a stale copy of code
 # that lives beside it. Those are warnings; the updater leaves such references
 # alone precisely because bumping them creates the drift it would then find.
+# Self-repository (`$/`) references are exempt: they resolve to the commit
+# already running, so there is no pin that can lag the tree beside it.
 #
 # zizmor covers the complementary axis: weaknesses in the workflow definitions
 # themselves — credential persistence, template injection, over-broad
@@ -95,7 +97,7 @@ jobs:
         env:
           # Online audits are the point of running here; they need a token.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ZIZMOR_VERSION: "1.29.0"
+          ZIZMOR_VERSION: "1.30.1"
           SARIF_FILE: ${{ runner.temp }}/zizmor.sarif
         run: |
           set -uo pipefail

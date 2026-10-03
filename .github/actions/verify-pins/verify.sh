@@ -29,6 +29,9 @@
 #              about rather than guessed at, so that a typo cannot quietly
 #              demote a pin out of the only class that fails.
 #   none       No version comment, so there is nothing to compare against.
+#   self       A self-repository (`$/`) reference. It resolves to the
+#              commit already running, so every check below is answered by
+#              construction; counted, but not otherwise examined.
 #
 # Check B - advisory lookup. Query the GitHub Advisory Database. An exact
 # version is queried as OWNER/REPO@VERSION so a pin on a patched release is not
@@ -39,12 +42,13 @@
 # SHA genuinely is what the tag resolves to) while naming a path not present
 # there, which otherwise fails only at run time.
 #
-# Check D - self-reference content drift. A reference naming the repository
-# being audited is internal coupling, not a dependency: a reusable workflow's
-# relative `./` paths resolve against the caller's workspace, so this repo's
-# own actions must be named absolutely. For those, "the pinned SHA is old" is
-# not a finding — every commit to this repository makes it older. The
-# answerable question is whether the referenced action's content differs
+# Check D - legacy absolute self-reference content drift. A SHA-pinned reference
+# naming the repository being audited is internal coupling, not a dependency:
+# a reusable workflow's relative `./` paths resolve against the caller's
+# workspace, which is why these references were previously named absolutely.
+# For those, "the pinned SHA is old" is not a finding — every commit to this
+# repository makes it older. The answerable question is whether the referenced
+# action's content differs
 # between the pinned commit and the audited tree, i.e. whether a workflow is
 # running a stale copy of an action that lives beside it. Reported as a warning
 # because it describes internal lag, not an upstream compromise. Repositories

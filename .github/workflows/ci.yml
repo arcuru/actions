@@ -38,19 +38,18 @@ jobs:
         run: |
           set -uo pipefail
 
-          # actionlint (1.7.12, current) rejects the self-repository syntax
-          # `$/<path>` as a malformed `uses:` value: it accepts only
-          # `{owner}/{repo}@{ref}` and `./path`. GitHub shipped `$/` on
-          # 2026-07-30; actionlint's last release predates it by four months.
-          #
-          # The scoped `-ignore` below suppresses exactly that parse-time
-          # rejection and nothing else: in actionlint's regex dialect `\$`
-          # matches a literal `$`, and the leading `"` anchors the pattern to
-          # the quoted action name, so a `$/` self-reference is ignored while a
-          # genuinely malformed ref (e.g. `uses: actions/checkout` with no
-          # `@ref`) is still reported. Delete the flag once actionlint
-          # understands `$/` (upstream issue #711).
+          # actionlint 1.7.12 lacks `$/` support. Suppress only its missing-ref
+          # diagnostic for self-repository action paths and its unsupported
+          # reusable-workflow format diagnostic, not other lint.
+          # Remove this workaround when support ships:
+          # https://github.com/rhysd/actionlint/issues/711
           nix run nixpkgs#actionlint -- \
             -color \
-            -ignore 'specifying action "\$/' \
+            -ignore '^specifying action "\$/[^"@]+" in invalid format because ref is missing\.' \
+            -ignore '^reusable workflow call "\$/\.github/workflows/[^"/@]+\.ya?ml" at "uses" is not following the format ' \
             .github/workflows/*.yml
+
+      - name: Run self-reference regressions
+        run: |
+          nix shell nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#jq nixpkgs#uv \
+            --command uv run .github/tests/test_self_references.py

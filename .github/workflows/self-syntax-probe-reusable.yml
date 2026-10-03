@@ -1,0 +1,37 @@
+# Called by the probe matrix to test `$/` inside a reusable workflow, not only
+# directly in a top-level workflow. No checkout and no secrets are needed.
+name: "Self: reusable self-syntax probe"
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: "Runner image to probe."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.repository_owner == 'arcuru'
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Self-repository reference from a reusable workflow
+        id: probe
+        uses: $/.github/actions/self-syntax-probe
+
+      - name: Assert the probe executed
+        env:
+          MARKER: ${{ steps.probe.outputs.marker }}
+        run: |
+          set -uo pipefail
+          if [ "$MARKER" != "self-syntax-ok" ]; then
+            echo "::error::Reusable workflow self-repository syntax produced no marker on ${RUNNER_OS}/${RUNNER_ARCH} (got '${MARKER}')."
+            exit 1
+          fi
+          echo "Reusable workflow self-repository syntax works on this runner, including nested composition."
