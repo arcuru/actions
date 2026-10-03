@@ -13,16 +13,9 @@
 name: "Self: self-syntax probe"
 
 on:
-  # Runs on push to the branch that carries it, so the probe can be exercised
-  # without first landing on the default branch — which is the thing it exists
-  # to decide.
-  push:
-    branches: [feat/self-repository-syntax]
+  # Exercise the candidate before merging; manual runs can re-check runner images.
+  pull_request:
   workflow_dispatch:
-  # Weekly, so a runner image update that adds support shows up on its own
-  # rather than waiting for someone to remember to re-check.
-  schedule:
-    - cron: "0 7 * * 1"
 
 permissions:
   contents: read

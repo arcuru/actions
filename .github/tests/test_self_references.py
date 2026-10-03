@@ -292,6 +292,9 @@ class ProbeTests(unittest.TestCase):
         self.nested = load(".github/actions/self-syntax-probe/nested/action.yml")
         self.jobs = [self.workflow["jobs"]["probe"], self.reusable["jobs"]["probe"]]
 
+    def test_probe_only_runs_on_unfiltered_pull_requests_and_manual_dispatch(self):
+        self.assertEqual(self.workflow["on"], {"pull_request": "", "workflow_dispatch": ""})
+
     def test_both_probe_matrices_cover_all_required_runner_images(self):
         for job in self.workflow["jobs"].values():
             self.assertEqual(job["strategy"]["matrix"]["runner"],

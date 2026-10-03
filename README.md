@@ -366,9 +366,10 @@ nix shell nixpkgs#actionlint nixpkgs#shellcheck nixpkgs#jq nixpkgs#uv \
 ```
 
 These fixtures and successful linting are **not runner execution evidence**.
-Before merging, the repository owner must publish the candidate on the upstream
-`feat/self-repository-syntax` branch (the probe's push trigger) and check all six
-jobs: direct and reusable/nested execution on all three runner images.
+The probe runs on ordinary `pull_request` events and supports `workflow_dispatch`
+for manual re-checks; it has no push or scheduled trigger. Before merging, check
+all six jobs on the upstream PR: direct and reusable/nested execution on all
+three runner images. No separate upstream branch push is required.
 The owner gate deliberately prevents this from running in a fork. The in-repo
 probe does not test a different consumer repository or GitHub Enterprise Server;
 consumer workflows are not changed here. Hosted support alone cannot establish
