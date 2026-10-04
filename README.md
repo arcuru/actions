@@ -41,6 +41,13 @@ Output `push-args` is empty unless both `signing-key` and `push-target` are set;
 
 The action does not install `nix-fast-build`. Add it to your flake's dev shell and invoke it through `nix develop -c`, so CI and local runs use the same locked version.
 
+### `commit-and-pr` body inputs
+
+Pass `pr-body` for inline text, or `pr-body-file` for a path to a UTF-8 body file on the runner.
+The file takes precedence when both are supplied; the action appends the hold section and uses `gh pr create/edit --body-file`.
+The cargo and flake update workflows keep full diagnostics under `runner.temp` and in the run log, and limit displayed reports to 50,000 bytes.
+Flake PRs show the per-input summary rather than raw Nix download/build output.
+
 ## Reusable workflows
 
 All six follow the same calling convention: each consumer repo ships a thin wrapper that owns the schedule, the wrapper calls the reusable workflow here.
@@ -401,6 +408,13 @@ actually took — is invisible to it. Detecting that remains the job of the
 `scan-pins` / `verify-pins` pass described above, and stays the more important
 half of this workflow. The two are complementary: one checks that references
 still mean what they said, the other checks what the workflows do with them.
+
+## Local checks
+
+Run the update-report regressions with `uv run tests/test_update_reports.py`.
+They execute the workflow and composite shell steps with stubbed `nix`, `git`, and `gh`, including large UTF-8 logs, shell metacharacters, update failures, and PR create/edit paths.
+No workflows run on GitHub and no branches are pushed by these tests.
+The actionlint command in [CI](.github/workflows/ci.yml) checks all reusable workflows.
 
 ## Releases
 

@@ -28,7 +28,12 @@ inputs:
     required: true
   pr-body:
     description: "PR body content (hold section appended automatically)"
-    required: true
+    required: false
+    default: ""
+  pr-body-file:
+    description: "Path to a PR body file; takes precedence over pr-body (hold section appended automatically)"
+    required: false
+    default: ""
   hold-days:
     description: "Days to hold before merge"
     required: false
@@ -96,7 +101,14 @@ runs:
       id: pr
       shell: bash
       run: |
-        HOLD_SECTION=$(cat <<HOLD_EOF
+        FULL_BODY_FILE="${RUNNER_TEMP}/dependency-pr.md"
+        if [ -n "$PR_BODY_FILE" ]; then
+          cat "$PR_BODY_FILE" > "$FULL_BODY_FILE"
+        else
+          printf '%s' "$PR_BODY" > "$FULL_BODY_FILE"
+        fi
+
+        cat <<HOLD_EOF >> "$FULL_BODY_FILE"
 
         ### Hold
 
@@ -105,16 +117,13 @@ runs:
 
         <!-- hold-until: $HOLD_DATE -->
         HOLD_EOF
-        )
-
-        FULL_BODY="${PR_BODY}${HOLD_SECTION}"
 
         # A same-day re-run pushes to the same dated branch, so reuse that PR.
         # Its hold-until is identical, so refreshing the body resets nothing.
         EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
 
         if [ -n "$EXISTING_PR" ]; then
-          gh pr edit "$EXISTING_PR" --body "$FULL_BODY"
+          gh pr edit "$EXISTING_PR" --body-file "$FULL_BODY_FILE"
           gh pr comment "$EXISTING_PR" --body "$UPDATE_COMMENT"
           PR_NUM="$EXISTING_PR"
         else
@@ -122,7 +131,7 @@ runs:
             --head "$BRANCH" \
             --base main \
             --title "$PR_TITLE" \
-            --body "$FULL_BODY" \
+            --body-file "$FULL_BODY_FILE" \
             --label dependencies \
             --label on-hold)
           PR_NUM=$(echo "$PR_URL" | grep -o '[0-9]*$')
@@ -133,6 +142,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         BRANCH: ${{ inputs.branch }}
         PR_BODY: ${{ inputs.pr-body }}
+        PR_BODY_FILE: ${{ inputs.pr-body-file }}
         PR_TITLE: ${{ inputs.pr-title }}
         UPDATE_COMMENT: ${{ inputs.update-comment }}
         HOLD_DATE: ${{ steps.hold.outputs.date }}

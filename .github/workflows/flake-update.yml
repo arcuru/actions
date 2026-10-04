@@ -85,21 +85,15 @@ jobs:
       - name: Run flake update
         id: update
         run: |
-          # Capture the exit code explicitly instead of letting `set -e` abort
-          # mid-assignment: the command substitution swallows stderr, so an
-          # aborted step would fail with no diagnostic output at all.
           set +e
-          OUTPUT=$(nix flake update 2>&1)
-          EXIT_CODE=$?
-          set -e
-          echo "$OUTPUT"
-          DELIM="UPDATE_EOF_${RANDOM}${RANDOM}${RANDOM}"
-          {
-            echo "output<<${DELIM}"
-            echo "$OUTPUT"
-            echo "${DELIM}"
-          } >> "$GITHUB_OUTPUT"
-          exit "$EXIT_CODE"
+          nix flake update 2>&1 | tee "$REPORT"
+          PIPE_STATUSES=("${PIPESTATUS[@]}")
+          if (( PIPE_STATUSES[1] != 0 )); then
+            exit "${PIPE_STATUSES[1]}"
+          fi
+          exit "${PIPE_STATUSES[0]}"
+        env:
+          REPORT: ${{ runner.temp }}/flake-update.txt
 
       - name: Generate input diff summary
         id: summary
@@ -138,11 +132,42 @@ jobs:
             SUMMARY="No input revisions changed (lock file metadata update only)."
           fi
 
+          printf '%b\n' "$SUMMARY" > "$SUMMARY_FILE"
+        env:
+          SUMMARY_FILE: ${{ runner.temp }}/flake-update-summary.txt
+
+      - name: Generate PR body
+        run: |
+          # Keep the complete summary; truncate only its displayed copy. Dropping
+          # the partial first line also avoids splitting a UTF-8 sequence.
+          MAX_REPORT_BYTES=50000
+          DISPLAY_FILE="$SUMMARY_FILE"
+          if [ "$(wc -c < "$SUMMARY_FILE")" -gt "$MAX_REPORT_BYTES" ]; then
+            DISPLAY_FILE="${SUMMARY_FILE}.tail"
+            tail -c "$MAX_REPORT_BYTES" "$SUMMARY_FILE" | tail -n +2 > "$DISPLAY_FILE"
+          fi
+
           {
-            echo "text<<SUMMARY_EOF"
-            echo -e "$SUMMARY"
-            echo "SUMMARY_EOF"
-          } >> "$GITHUB_OUTPUT"
+            echo '## Flake Input Update'
+            echo
+            echo "Monthly \`nix flake update\` of Nix dependencies."
+            echo
+            echo '### Input Changes'
+            echo
+            cat "$DISPLAY_FILE"
+            echo
+            if [ "$DISPLAY_FILE" != "$SUMMARY_FILE" ]; then
+              echo "> Summary truncated to the last ${MAX_REPORT_BYTES} bytes. See the lock file diff for all input changes."
+              echo
+            fi
+            # The per-input summary already describes the update; raw Nix
+            # download/build diagnostics belong in the run log, not the PR.
+            echo "Full update diagnostics are in the [workflow run log](${RUN_URL})."
+          } > "$BODY_FILE"
+        env:
+          SUMMARY_FILE: ${{ runner.temp }}/flake-update-summary.txt
+          BODY_FILE: ${{ runner.temp }}/flake-update-pr.md
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Commit and create PR
         uses: $/.github/actions/commit-and-pr
@@ -151,23 +176,7 @@ jobs:
           files: flake.lock
           commit-message: "chore(deps): update flake inputs"
           pr-title: "chore(deps): update flake inputs"
-          pr-body: |
-            ## Flake Input Update
-
-            Monthly `nix flake update` of Nix dependencies.
-
-            ### Input Changes
-
-            ${{ steps.summary.outputs.text }}
-
-            <details>
-            <summary>nix flake update output</summary>
-
-            ```
-            ${{ steps.update.outputs.output }}
-            ```
-
-            </details>
+          pr-body-file: ${{ runner.temp }}/flake-update-pr.md
           hold-days: ${{ inputs.hold-days }}
           update-comment: "Updated with latest `nix flake update` results."
           github-token: ${{ secrets.PAT_TOKEN }}

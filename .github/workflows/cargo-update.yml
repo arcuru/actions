@@ -75,36 +75,76 @@ jobs:
         with:
           prefix: deps/cargo-update
 
+      # Keep cold-cache Nix build diagnostics out of the cargo report.
+      - name: Warm the dev shell
+        run: nix develop --command true
+
       - name: Run cargo update
         id: update
         run: |
-          # Capture the exit code explicitly instead of letting `set -e` abort
-          # mid-assignment: the command substitution swallows stderr, so an
-          # aborted step would fail with no diagnostic output at all.
           set +e
-          OUTPUT=$(nix develop --command cargo update 2>&1)
-          EXIT_CODE=$?
-          set -e
-          echo "$OUTPUT"
-          DELIM="UPDATE_EOF_${RANDOM}${RANDOM}${RANDOM}"
-          {
-            echo "output<<${DELIM}"
-            echo "$OUTPUT"
-            echo "${DELIM}"
-          } >> "$GITHUB_OUTPUT"
-          exit "$EXIT_CODE"
+          nix develop --command cargo update 2>&1 | tee "$REPORT"
+          PIPE_STATUSES=("${PIPESTATUS[@]}")
+          if (( PIPE_STATUSES[1] != 0 )); then
+            exit "${PIPE_STATUSES[1]}"
+          fi
+          exit "${PIPE_STATUSES[0]}"
+        env:
+          REPORT: ${{ runner.temp }}/cargo-update.txt
 
       - name: Capture diff stats
         id: diff
         run: |
-          if ! git diff --quiet Cargo.lock; then
-            DIFF=$(git diff --stat Cargo.lock)
-            {
-              echo "stat<<DIFF_EOF"
-              echo "$DIFF"
-              echo "DIFF_EOF"
-            } >> "$GITHUB_OUTPUT"
+          git diff --stat Cargo.lock > "$DIFF_FILE"
+        env:
+          DIFF_FILE: ${{ runner.temp }}/cargo-update-diff.txt
+
+      - name: Generate PR body
+        run: |
+          # A PR body is capped at 65536 characters. Keep the report on disk
+          # and truncate only the display copy, leaving room for the hold text.
+          MAX_REPORT_BYTES=50000
+          DISPLAY_FILE="$REPORT"
+          if [ "$(wc -c < "$REPORT")" -gt "$MAX_REPORT_BYTES" ]; then
+            DISPLAY_FILE="${REPORT}.tail"
+            # Drop the partial first line to avoid splitting UTF-8 sequences.
+            tail -c "$MAX_REPORT_BYTES" "$REPORT" | tail -n +2 > "$DISPLAY_FILE"
           fi
+
+          {
+            echo '## Cargo Dependency Update'
+            echo
+            echo "Monthly \`cargo update\` of \`Cargo.lock\` dependencies."
+            echo
+            if [ "$DISPLAY_FILE" != "$REPORT" ]; then
+              echo "> Output truncated to the last ${MAX_REPORT_BYTES} bytes. The full report is in the [workflow run log](${RUN_URL})."
+              echo
+            fi
+            echo '<details>'
+            echo '<summary>cargo update output</summary>'
+            echo
+            echo '```'
+            cat "$DISPLAY_FILE"
+            echo
+            echo '```'
+            echo
+            echo '</details>'
+            echo
+            echo '<details>'
+            echo '<summary>Diff stats</summary>'
+            echo
+            echo '```'
+            cat "$DIFF_FILE"
+            echo
+            echo '```'
+            echo
+            echo '</details>'
+          } > "$BODY_FILE"
+        env:
+          REPORT: ${{ runner.temp }}/cargo-update.txt
+          DIFF_FILE: ${{ runner.temp }}/cargo-update-diff.txt
+          BODY_FILE: ${{ runner.temp }}/cargo-update-pr.md
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Commit and create PR
         uses: $/.github/actions/commit-and-pr
@@ -113,28 +153,7 @@ jobs:
           files: Cargo.lock
           commit-message: "chore(deps): update cargo dependencies"
           pr-title: "chore(deps): update cargo dependencies"
-          pr-body: |
-            ## Cargo Dependency Update
-
-            Monthly `cargo update` of `Cargo.lock` dependencies.
-
-            <details>
-            <summary>cargo update output</summary>
-
-            ```
-            ${{ steps.update.outputs.output }}
-            ```
-
-            </details>
-
-            <details>
-            <summary>Diff stats</summary>
-
-            ```
-            ${{ steps.diff.outputs.stat }}
-            ```
-
-            </details>
+          pr-body-file: ${{ runner.temp }}/cargo-update-pr.md
           hold-days: ${{ inputs.hold-days }}
           update-comment: "Updated with latest `cargo update` results."
           github-token: ${{ secrets.PAT_TOKEN }}
