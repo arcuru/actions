@@ -404,7 +404,32 @@ still mean what they said, the other checks what the workflows do with them.
 
 ## Releases
 
-Releases are tagged from `main` as `vX.Y.Z`. Consumers should pin a full SHA *with* a matching version comment so the `actions-update` workflow can bump them.
+To request a release, open a PR that increases `VERSION` (stable `X.Y.Z`, without
+`v`) and adds reviewed notes at `releases/vX.Y.Z.md`. Do not change the current
+version's notes without bumping the version. Ordinary PRs leave both unchanged.
+Merging the version-bump PR approves publication.
+
+After the normal CI checks pass on that main push, CI creates an immutable
+`vX.Y.Z` tag and a stable GitHub release at the **exact merged push-event SHA**.
+PR and fork runs only validate; they cannot publish. Each main CI run has its
+own concurrency group so later pushes cannot cancel or replace a queued release.
+An unrelated main push does not republish the current version.
+
+If publication fails partway through, rerun the original main CI run. It verifies
+an existing tag/release before continuing, can finish a tag-only publication, and
+refuses conflicting SHAs, notes or release metadata. It never moves tags or edits
+existing releases. Do not rerun against a different commit or delete a tag to
+work around a conflict; investigate it instead.
+
+Offline regression tests use temporary repositories and a strict publishing stub:
+
+```sh
+python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+```
+
+Consumers should pin a full SHA *with* a matching published version comment so the
+`actions-update` workflow can bump them. The initial release PR requests v0.5.0;
+its release commit is determined only after merge and successful main validation.
 
 Breaking changes (input renames, removed secrets, schema changes) bump the major version. Most updates are SHA-pin bumps inside the reusable workflows or composite-action body changes — those don't require consumers to act.
 

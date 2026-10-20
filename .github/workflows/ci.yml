@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# PR updates supersede old validation. Main runs must each survive: even a
+# non-cancelling shared group can replace a pending release with a later push.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   actionlint:
@@ -30,6 +32,7 @@ jobs:
         with:
           # Read-only job: never leave the token in the checkout's git config.
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Setup Nix
         uses: ./.github/actions/setup-nix
@@ -42,3 +45,35 @@ jobs:
             -color \
             -ignore '^specifying action "\$/[^"@]+" in invalid format because ref is missing\.' \
             .github/workflows/*.yml
+
+      - name: Offline release regression tests
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+      - name: Validate version and release notes
+        run: python3 .github/scripts/release.py validate
+
+  publish:
+    name: Publish release
+    needs: actionlint
+    if: >-
+      github.repository_owner == 'arcuru' &&
+      github.repository == 'arcuru/actions' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout validated event commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Publish immutable tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_RESULT: ${{ needs.actionlint.result }}
+        run: python3 .github/scripts/release.py publish
