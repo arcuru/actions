@@ -62,7 +62,8 @@ elif method == "POST" and path == "git/refs":
         state["tags"][tag] = {"type": "commit", "sha": state.get("race_sha", payload["sha"])}
         status = 422 if state.get("race_tag") else 201
 elif method == "POST" and path == "releases":
-    assert set(payload) == {"tag_name", "target_commitish", "name", "body", "draft", "prerelease"}
+    assert set(payload) - {"make_latest"} == {"tag_name", "target_commitish", "name", "body", "draft", "prerelease"}
+    assert payload.get("make_latest", "true") in ("true", "false", "legacy")
     assert payload["tag_name"] in state["tags"]
     assert payload["draft"] is False and payload["prerelease"] is False
     if payload["tag_name"] in state["releases"]:
@@ -70,7 +71,16 @@ elif method == "POST" and path == "releases":
     elif state.get("release_failure"):
         status = 503
     else:
-        state["releases"][payload["tag_name"]] = payload
+        # GitHub defaults make_latest to true; legacy considers creation date
+        # and higher semantic versions. These fixtures use stable numeric tags.
+        # https://docs.github.com/en/rest/releases/releases#create-a-release
+        release = {key: value for key, value in payload.items() if key != "make_latest"}
+        state["releases"][payload["tag_name"]] = release
+        if payload.get("make_latest", "true") == "true":
+            state["latest"] = payload["tag_name"]
+        elif payload["make_latest"] == "legacy":
+            state["latest"] = max(state["releases"],
+                                  key=lambda tag: tuple(map(int, tag[1:].split("."))))
         status = 422 if state.get("race_release") else 201
 else:
     raise AssertionError("Forbidden remote operation: " + str(args))
@@ -185,6 +195,35 @@ sys.exit(subprocess.run([{REAL_GIT!r}, *sys.argv[1:]], env=os.environ).returncod
         self.event(self.sha, sha)
         self.run_script()
         self.assertEqual(self.data()["tags"]["v0.6.0"]["sha"], sha)
+
+    def test_delayed_older_release_and_retry_do_not_regress_latest(self):
+        self.request("0.6.0", "Next reviewed notes\n")
+        newer_sha = self.commit()
+        for retry in (False, True):
+            with self.subTest(retry=retry):
+                self.data(calls=[], tags={}, releases={}, objects={}, latest=None,
+                          release_failure=False)
+                self.git("checkout", "-q", newer_sha)
+                self.event(self.sha, newer_sha)
+                self.run_script()
+                self.assertEqual(self.data()["latest"], "v0.6.0")
+                self.git("checkout", "-q", self.sha)
+                self.event(self.base, self.sha)
+                if retry:
+                    self.data(release_failure=True)
+                    self.run_script(success=False, message="Release creation failed")
+                    self.assertEqual(self.data()["latest"], "v0.6.0")
+                    self.data(release_failure=False)
+                self.run_script()
+                data = self.data()
+                self.assertEqual(data["latest"], "v0.6.0")
+                self.assertEqual(data["tags"]["v0.5.0"]["sha"], self.sha)
+                self.assertEqual(data["releases"]["v0.5.0"]["target_commitish"], self.sha)
+                self.assertNotIn("make_latest", data["releases"]["v0.5.0"])
+                self.data(calls=[])
+                self.run_script()
+                self.no_writes()
+                self.assertEqual(self.data()["latest"], "v0.6.0")
 
     def test_unrelated_push_skips_even_if_earlier_release_needs_retry(self):
         (self.repo / "README").write_text("Unrelated\n")

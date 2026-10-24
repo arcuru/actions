@@ -148,7 +148,8 @@ def publish():
         # if the now-existing immutable tag proves the exact intended commit.
         require(tag_target(tag) == sha, f"Tag creation failed/conflicted: HTTP {status}")
     if release is None:
-        status, _ = api("POST", "releases", expected)
+        # Delayed older runs must not displace a newer stable release as latest.
+        status, _ = api("POST", "releases", {**expected, "make_latest": "legacy"})
         release = get(f"releases/tags/{tag}")
         require(release is not None, f"Release creation failed: HTTP {status}; rerun this CI run")
         check_release(release, expected)
