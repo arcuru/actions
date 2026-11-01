@@ -72,7 +72,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Read-only job: never leave the token in the checkout's git config.
           persist-credentials: false
@@ -88,7 +88,7 @@ jobs:
           pins: ${{ steps.scan.outputs.pins }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Audit workflows with zizmor
         id: zizmor
@@ -200,7 +200,7 @@ jobs:
         # its tracking issue, which is the only channel the pin findings have.
         # The failure stays visible in this step's own status.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@0fda7a646fd14a20daf520829ca1ae8847000819 # codeql-bundle-v2.27.3
         with:
           sarif_file: ${{ runner.temp }}/zizmor.sarif
           category: zizmor
